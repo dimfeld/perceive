@@ -9,6 +9,11 @@ path = "lib.rs"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+clap = { version = "4.0.32", features = ["derive"], optional = true }
 # Latest git to use the latest tch, which is required for M1
 rust-bert = { git = "https://github.com/guillaume-be/rust-bert.git" }
+strum = { version = "0.24.1", features = ["derive"] }
 tch = "0.10.1"
+
+[features]
+clap = ["dep:clap"]

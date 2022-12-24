@@ -1,11 +1,14 @@
 use std::io::Write;
 
-use clap::{Command, CommandFactory, FromArgMatches, Parser};
+use clap::{ArgMatches, Args as ArgsTrait, Command, CommandFactory, FromArgMatches};
 use eyre::eyre;
 use rustyline::{error::ReadlineError, Editor};
 use thiserror::Error;
 
-use crate::Args;
+use crate::{
+    cmd::{add::AddArgs, model::ModelArgs},
+    AppState, Args,
+};
 
 #[derive(Error, Debug)]
 enum ReplError {
@@ -17,9 +20,6 @@ enum ReplError {
 
     #[error(transparent)]
     Io(#[from] std::io::Error),
-
-    #[error("")]
-    Quit,
 }
 
 fn command() -> Command {
@@ -29,10 +29,18 @@ fn command() -> Command {
         .arg_required_else_help(true)
         .subcommand_required(true)
         .subcommand(Command::new("exit").alias("quit").about("Exit the REPL"))
-        .subcommand(Command::new("model").about("Set the active search model"))
+        .subcommand(AddArgs::augment_args(Command::new("add")))
+        .subcommand(ModelArgs::augment_args(Command::new("model")))
 }
 
-pub fn repl() -> Result<(), eyre::Report> {
+fn to_args<T: FromArgMatches>(matches: &ArgMatches) -> Result<T, clap::Error> {
+    <T as FromArgMatches>::from_arg_matches(matches).map_err(|e| {
+        let mut cmd = command();
+        e.format(&mut cmd)
+    })
+}
+
+pub fn repl(mut state: AppState) -> Result<(), eyre::Report> {
     let mut rl = Editor::<()>::new()?;
     loop {
         let input = rl.readline("> ");
@@ -52,24 +60,24 @@ pub fn repl() -> Result<(), eyre::Report> {
         }
 
         match parse(line) {
-            Ok(mut matches) => {
+            Ok(matches) => {
                 let result = match matches.subcommand() {
                     Some(("quit" | "exit", _)) => {
                         break;
                     }
+                    Some(("add", matches)) => {
+                        let args = to_args::<crate::cmd::add::AddArgs>(matches)?;
+                        crate::cmd::add::add_term(&mut state, args)
+                    }
                     Some(("model", matches)) => {
-                        println!("Not implemented yet");
-                        Ok(())
+                        let args = to_args::<crate::cmd::model::ModelArgs>(matches)?;
+                        crate::cmd::model::model(&mut state, args)
                     }
                     _ => {
-                        let args = <Args as FromArgMatches>::from_arg_matches_mut(&mut matches)
-                            .map_err(|e| {
-                                let mut cmd = command();
-                                e.format(&mut cmd)
-                            })?;
+                        let args = to_args::<Args>(&matches)?;
 
                         if let Some(command) = args.command {
-                            crate::cmd::handle_command(command)
+                            crate::cmd::handle_command(&mut state, command)
                         } else {
                             Ok(())
                         }
@@ -80,7 +88,6 @@ pub fn repl() -> Result<(), eyre::Report> {
                     println!("Error: {e}");
                 }
             }
-            Err(ReplError::Quit) => break,
             Err(err) => {
                 write!(std::io::stdout(), "{}", err)?;
                 std::io::stdout().flush()?;
@@ -95,6 +102,7 @@ fn parse(line: &str) -> Result<clap::ArgMatches, ReplError> {
     let mut args = shlex::split(line).ok_or(ReplError::InvalidQuoting)?;
 
     // This is a dumb way to fulfill the need for clap to have the app name first.
+    // There is probably some better solution.
     if args[0] != "perceive" {
         args.insert(0, "perceive".to_string());
     }

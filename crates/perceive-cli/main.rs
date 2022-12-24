@@ -1,10 +1,11 @@
 mod cmd;
 mod repl;
-mod search;
+mod state;
 
 use clap::Parser;
 use cmd::Commands;
 use eyre::Result;
+pub use state::AppState;
 
 #[derive(Parser, Debug)]
 #[command(about)]
@@ -17,14 +18,12 @@ fn main() -> Result<()> {
     color_eyre::install().unwrap();
 
     let args = Args::parse();
-    println!("{:?}", args);
+    let mut state = AppState::new();
 
     match args.command {
-        Some(cmd) => cmd::handle_command(cmd)?,
-        None => repl::repl()?,
+        Some(cmd) => cmd::handle_command(&mut state, cmd)?,
+        None => repl::repl(state)?,
     };
 
     Ok(())
-
-    // test()
 }

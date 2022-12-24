@@ -12,9 +12,11 @@ name = "perceive"
 [dependencies]
 clap = { version = "4.0.32", features = ["derive"] }
 color-eyre = "0.6.2"
+dialoguer = { version = "0.10.2", features = ["fuzzy-select"] }
 eyre = "0.6.8"
-"perceive-search" = { path = "../perceive-search" }
+"perceive-search" = { path = "../perceive-search", features = ["clap"] }
 rustyline = { version = "10.0.0", features = ["case_insensitive_history_search"] }
 shlex = "1.1.0"
+strum = "0.24.1"
 tch = "0.10.1"
 thiserror = "1.0.38"
