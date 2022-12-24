@@ -1,0 +1,14 @@
+[package]
+name = "perceive-search"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "lib.rs"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+# Latest git to use the latest tch, which is required for M1
+rust-bert = { git = "https://github.com/guillaume-be/rust-bert.git" }
+tch = "0.10.1"

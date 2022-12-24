@@ -1,0 +1,5 @@
+[target.aarch64-apple-darwin]
+
+# Needed to find libtorch when installed through Homebrew
+rustflags = "-L /opt/homebrew/opt/pytorch/lib"
+
