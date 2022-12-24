@@ -1,7 +1,7 @@
 use clap::Args;
 use eyre::Result;
-use perceive_search as psearch;
-use psearch::SentenceEmbeddingsModelType;
+use pcore::SentenceEmbeddingsModelType;
+use perceive_core as pcore;
 use tch::IndexOp;
 
 use crate::AppState;
@@ -31,7 +31,7 @@ pub fn search(state: &mut AppState, args: SearchArgs) -> Result<()> {
     let query_embedding = results.embeddings.i(0);
     let match_embeddings = results.embeddings.slice(0, 1, None, 1);
 
-    let cos_score = psearch::cosine_similarity_single_query(&query_embedding, &match_embeddings);
+    let cos_score = pcore::cosine_similarity_single_query(&query_embedding, &match_embeddings);
 
     let scores: Vec<f32> = Vec::from(cos_score);
 

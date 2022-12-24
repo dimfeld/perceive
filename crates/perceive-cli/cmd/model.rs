@@ -1,6 +1,6 @@
 use clap::Args;
 use dialoguer::FuzzySelect;
-use perceive_search::SentenceEmbeddingsModelType;
+use perceive_core::SentenceEmbeddingsModelType;
 use strum::IntoEnumIterator;
 
 use crate::AppState;
