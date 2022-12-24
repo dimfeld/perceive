@@ -1,21 +1,30 @@
-use perceive_search as search;
+mod cmd;
+mod repl;
+mod search;
 
-fn main() {
-    let sentences = &["Hello world!", "Hello planet!", "Goodbye World!"];
-    let results = search::embed(sentences).unwrap();
+use clap::Parser;
+use cmd::Commands;
+use eyre::Result;
 
-    let cos_score = search::cosine_similarity(&results.embeddings, &results.embeddings);
+#[derive(Parser, Debug)]
+#[command(about)]
+pub struct Args {
+    #[clap(subcommand)]
+    pub command: Option<Commands>,
+}
 
-    let scores: Vec<Vec<f32>> = Vec::from(cos_score);
+fn main() -> Result<()> {
+    color_eyre::install().unwrap();
 
-    for i in 0..sentences.len() {
-        for j in 0..sentences.len() {
-            println!(
-                "{first:<20} {second:<20}   {score:.2}",
-                first = sentences[i],
-                second = sentences[j],
-                score = scores[i][j]
-            );
-        }
-    }
+    let args = Args::parse();
+    println!("{:?}", args);
+
+    match args.command {
+        Some(cmd) => cmd::handle_command(cmd)?,
+        None => repl::repl()?,
+    };
+
+    Ok(())
+
+    // test()
 }

@@ -1,0 +1,105 @@
+use std::io::Write;
+
+use clap::{Command, CommandFactory, FromArgMatches, Parser};
+use eyre::eyre;
+use rustyline::{error::ReadlineError, Editor};
+use thiserror::Error;
+
+use crate::Args;
+
+#[derive(Error, Debug)]
+enum ReplError {
+    #[error("Failed to parse mismatched quotes")]
+    InvalidQuoting,
+
+    #[error(transparent)]
+    ParseError(#[from] clap::Error),
+
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+
+    #[error("")]
+    Quit,
+}
+
+fn command() -> Command {
+    let base_cmd = crate::Args::command();
+
+    base_cmd
+        .arg_required_else_help(true)
+        .subcommand_required(true)
+        .subcommand(Command::new("exit").alias("quit").about("Exit the REPL"))
+        .subcommand(Command::new("model").about("Set the active search model"))
+}
+
+pub fn repl() -> Result<(), eyre::Report> {
+    let mut rl = Editor::<()>::new()?;
+    loop {
+        let input = rl.readline("> ");
+
+        let line = match &input {
+            Ok(line) => {
+                let line = line.trim();
+                rl.add_history_entry(line);
+                line
+            }
+            Err(ReadlineError::Interrupted) | Err(ReadlineError::Eof) => break,
+            Err(e) => return Err(eyre!("{}", e)),
+        };
+
+        if line.is_empty() {
+            continue;
+        }
+
+        match parse(line) {
+            Ok(mut matches) => {
+                let result = match matches.subcommand() {
+                    Some(("quit" | "exit", _)) => {
+                        break;
+                    }
+                    Some(("model", matches)) => {
+                        println!("Not implemented yet");
+                        Ok(())
+                    }
+                    _ => {
+                        let args = <Args as FromArgMatches>::from_arg_matches_mut(&mut matches)
+                            .map_err(|e| {
+                                let mut cmd = command();
+                                e.format(&mut cmd)
+                            })?;
+
+                        if let Some(command) = args.command {
+                            crate::cmd::handle_command(command)
+                        } else {
+                            Ok(())
+                        }
+                    }
+                };
+
+                if let Err(e) = result {
+                    println!("Error: {e}");
+                }
+            }
+            Err(ReplError::Quit) => break,
+            Err(err) => {
+                write!(std::io::stdout(), "{}", err)?;
+                std::io::stdout().flush()?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn parse(line: &str) -> Result<clap::ArgMatches, ReplError> {
+    let mut args = shlex::split(line).ok_or(ReplError::InvalidQuoting)?;
+
+    // This is a dumb way to fulfill the need for clap to have the app name first.
+    if args[0] != "perceive" {
+        args.insert(0, "perceive".to_string());
+    }
+
+    command()
+        .try_get_matches_from(args)
+        .map_err(ReplError::from)
+}
