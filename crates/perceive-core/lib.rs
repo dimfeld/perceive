@@ -1,4 +1,7 @@
-mod sources;
+pub mod batch_sender;
+pub mod db;
+pub mod paths;
+pub mod sources;
 
 use std::sync::Arc;
 

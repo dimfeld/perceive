@@ -2,6 +2,8 @@ mod cmd;
 mod repl;
 mod state;
 
+use std::path::PathBuf;
+
 use clap::Parser;
 use cmd::Commands;
 use eyre::Result;
@@ -12,6 +14,9 @@ pub use state::AppState;
 pub struct Args {
     #[clap(subcommand)]
     pub command: Option<Commands>,
+
+    /// The database to open, if not the default one.
+    pub database: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {

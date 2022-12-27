@@ -1,3 +1,8 @@
+CREATE TABLE config (
+  key TEXT PRIMARY KEY,
+  value TEXT,
+);
+
 CREATE TABLE models (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
@@ -29,7 +34,9 @@ CREATE TABLE sources (
   last_indexed BIGINT NOT NULL DEFAULT 0,
   -- The version of the index, updated when starting.
   index_version BIGINT NOT NULL DEFAULT 0,
-  preferred_model BIGINT NOT NULL REFERENCES models(id),
+  -- How often to reindex the source, in seconds.
+  -- If NULL it will only be reindex manually.
+  index_interval BIGINT,
   deleted_at BIGINT
 );
 

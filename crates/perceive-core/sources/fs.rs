@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use super::SourceScanner;
-use crate::Item;
+use super::scan::SourceScanner;
+use crate::{batch_sender::BatchSender, Item};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FsSourceConfig {
@@ -57,7 +57,7 @@ impl SourceScanner for FileScanner {
     }
 }
 
-const BATCH_SIZE: usize = 32;
+const BATCH_SIZE: usize = 64;
 
 struct FileVisitorBuilder {
     source_id: i64,
@@ -70,8 +70,7 @@ impl<'s> ignore::ParallelVisitorBuilder<'s> for FileVisitorBuilder {
         Box::new(FileVisitor {
             source_id: self.source_id,
             glob: self.glob.clone(),
-            output: self.output.clone(),
-            buffer: Vec::with_capacity(BATCH_SIZE),
+            sender: BatchSender::new(BATCH_SIZE, self.output.clone()),
         })
     }
 }
@@ -79,8 +78,7 @@ impl<'s> ignore::ParallelVisitorBuilder<'s> for FileVisitorBuilder {
 struct FileVisitor {
     source_id: i64,
     glob: globset::GlobSet,
-    output: flume::Sender<Vec<Item>>,
-    buffer: Vec<Item>,
+    sender: BatchSender<Item>,
 }
 
 impl ignore::ParallelVisitor for FileVisitor {
@@ -106,18 +104,11 @@ impl ignore::ParallelVisitor for FileVisitor {
                     },
                 };
 
-                self.buffer.push(item);
-
-                if self.buffer.len() >= BATCH_SIZE {
-                    let output_buffer =
-                        std::mem::replace(&mut self.buffer, Vec::with_capacity(BATCH_SIZE));
-                    let send_result = self.output.send(output_buffer);
-
-                    if send_result.is_err() {
-                        // Something went wrong downstream, so there's no point in walking the FS
-                        // anymore.
-                        return ignore::WalkState::Quit;
-                    }
+                let send_result = self.sender.add(item);
+                if send_result.is_err() {
+                    // Something went wrong downstream, so there's no point in walking the FS
+                    // anymore.
+                    return ignore::WalkState::Quit;
                 }
             }
         }
@@ -128,9 +119,6 @@ impl ignore::ParallelVisitor for FileVisitor {
 
 impl Drop for FileVisitor {
     fn drop(&mut self) {
-        if !self.buffer.is_empty() {
-            let buffer = std::mem::take(&mut self.buffer);
-            self.output.send(buffer).ok();
-        }
+        self.sender.flush().ok();
     }
 }

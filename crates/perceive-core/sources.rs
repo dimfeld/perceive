@@ -1,11 +1,10 @@
 mod fs;
-
-use std::sync::Arc;
+mod scan;
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use self::fs::FsSourceConfig;
+use self::{fs::FsSourceConfig, scan::SourceScanner};
 use crate::Item;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -22,7 +21,8 @@ pub enum SourceStatus {
     Error { error: String },
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Copy, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum ItemCompareStrategy {
     #[default]
     MTimeAndContent,
@@ -52,7 +52,10 @@ pub struct Source {
     pub name: String,
     pub config: SourceConfig,
     pub location: String,
+    pub compare_strategy: ItemCompareStrategy,
+    pub status: SourceStatus,
     pub last_indexed: OffsetDateTime,
+    pub index_version: i64,
     pub preferred_model: i64,
 }
 
@@ -66,45 +69,4 @@ impl Source {
             }),
         }
     }
-}
-
-pub trait SourceScanner: Send + Sync {
-    /// Scan the sources and output batches of found items
-    fn scan(&self, output: flume::Sender<Vec<Item>>) -> Result<(), eyre::Report>;
-    /// Read the full content of a single item. If the function reads the file and determines that
-    /// it should not be indexed, it should return None.
-    fn read(&self, item: Item) -> Result<Option<Item>, eyre::Report>;
-}
-
-pub fn scan_source(source: &Source) {
-    let scanner = source.create_scanner();
-
-    std::thread::scope(|scope| {
-        let (item_sender, item_receiver) = flume::bounded(8);
-
-        // Make a pipeline with the following stages:
-        // - Scan the file system and send out batches of items
-        let scan_task = scope.spawn(|| scanner.scan(item_sender));
-
-        // STAGE 2
-        // - Match each item to a database entry.
-        // - If one was found, do a preliminary match (i.e. by mtime) to see if it can be skipped.
-
-        // STAGE 3
-        // - Read the content of the file
-        // - Match against the content, if applicable
-        // - If the content did not change, skip the item.
-
-        // STAGE 4
-        // - Pool the entries into larger batches here since in the general case a lot of
-        //   them will have been skipped at this point
-
-        // STAGE 5
-        // - Calculate embeddings for the items in this batch that we are keeping.
-        // - Update the database for items that will be kept
-
-        // AFTER PIPELINE
-        // - Delete any items for which the index_version did not get updated to
-        //   the latest vesion.
-    });
 }
