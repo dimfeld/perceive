@@ -19,10 +19,17 @@ CREATE TABLE model_versions (
 CREATE TABLE sources (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
-  source_type TEXT NOT NULL,
+  -- Configuration specific to the source
+  config TEXT,
   location TEXT NOT NULL,
+  -- ItemCompareStrategy
+  compare_strategy TEXT NOT NULL,
+  -- SourceStatus
+  status TEXT NOT NULL,
   last_indexed BIGINT NOT NULL DEFAULT 0,
-  preferred_model BIGINT REFERENCES models(id),
+  -- The version of the index, updated when starting.
+  index_version BIGINT NOT NULL DEFAULT 0,
+  preferred_model BIGINT NOT NULL REFERENCES models(id),
   deleted_at BIGINT
 );
 
@@ -50,6 +57,7 @@ CREATE TABLE item_embeddings (
   model_id BIGINT NOT NULL,
   model_version BIGINT NOT NULL,
   item_id BIGINT NOT NULL REFERENCES items(id),
+  item_index_version BIGINT NOT NULL,
   embedding BLOB NOT NULL,
   FOREIGN KEY(model_id, model_version) REFERENCES model_versions(model_id, version),
   PRIMARY KEY(model_id, model_version, item_id)

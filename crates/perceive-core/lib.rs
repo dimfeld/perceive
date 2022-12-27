@@ -1,3 +1,5 @@
+mod sources;
+
 use std::sync::Arc;
 
 use rust_bert::{
@@ -7,8 +9,30 @@ use rust_bert::{
     },
     RustBertError,
 };
+use serde::{Deserialize, Serialize};
 use strum::{AsRefStr, Display, EnumIter, EnumString, EnumVariantNames};
 use tch::{Kind, Tensor};
+use time::OffsetDateTime;
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct ItemMetadata {
+    pub name: Option<String>,
+    pub author: Option<String>,
+    pub description: Option<String>,
+    pub mtime: Option<OffsetDateTime>,
+    pub atime: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Item {
+    pub source_id: i64,
+    /// The path, URL, etc. of the item
+    pub external_id: String,
+    pub hash: Option<String>,
+    pub content: Option<String>,
+    #[serde(flatten)]
+    pub metadata: ItemMetadata,
+}
 
 #[derive(
     Debug, Clone, Copy, Eq, PartialEq, Display, EnumString, AsRefStr, EnumIter, EnumVariantNames,

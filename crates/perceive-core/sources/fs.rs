@@ -1,0 +1,136 @@
+use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
+
+use super::SourceScanner;
+use crate::Item;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FsSourceConfig {
+    pub globs: Vec<String>,
+    pub overrides: Vec<String>,
+}
+
+pub struct FileScanner {
+    pub source_id: i64,
+    pub location: String,
+    pub config: FsSourceConfig,
+}
+
+impl SourceScanner for FileScanner {
+    fn scan(&self, output: flume::Sender<Vec<Item>>) -> Result<(), eyre::Report> {
+        let mut glob_builder = globset::GlobSetBuilder::new();
+        if self.config.globs.is_empty() {
+            glob_builder.add(globset::Glob::new("*")?);
+        } else {
+            for glob in &self.config.globs {
+                glob_builder.add(globset::Glob::new(glob)?);
+            }
+        }
+
+        let glob = glob_builder.build()?;
+
+        let mut visitor_builder = FileVisitorBuilder {
+            source_id: self.source_id,
+            glob,
+            output,
+        };
+
+        ignore::WalkBuilder::new(std::path::Path::new(&self.location))
+            .build_parallel()
+            .visit(&mut visitor_builder);
+        Ok(())
+    }
+
+    fn read(&self, mut item: Item) -> Result<Option<Item>, eyre::Report> {
+        let Ok(content) = std::fs::read_to_string(std::path::Path::new(&item.external_id)) else {
+            // Currently we just return None if reading fails. This includes where the file
+            // is a binary file that can't be converted to UTF-8. In the future we should
+            // distinguish between these cases.
+            //
+            // Future iterations of this will also try to process other file formats that aren't plain
+            // text but do contain text (i.e. Word, Pages, etc.).
+            return Ok(None);
+        };
+
+        item.content = Some(content);
+        Ok(Some(item))
+    }
+}
+
+const BATCH_SIZE: usize = 32;
+
+struct FileVisitorBuilder {
+    source_id: i64,
+    glob: globset::GlobSet,
+    output: flume::Sender<Vec<Item>>,
+}
+
+impl<'s> ignore::ParallelVisitorBuilder<'s> for FileVisitorBuilder {
+    fn build(&mut self) -> Box<dyn ignore::ParallelVisitor + 's> {
+        Box::new(FileVisitor {
+            source_id: self.source_id,
+            glob: self.glob.clone(),
+            output: self.output.clone(),
+            buffer: Vec::with_capacity(BATCH_SIZE),
+        })
+    }
+}
+
+struct FileVisitor {
+    source_id: i64,
+    glob: globset::GlobSet,
+    output: flume::Sender<Vec<Item>>,
+    buffer: Vec<Item>,
+}
+
+impl ignore::ParallelVisitor for FileVisitor {
+    fn visit(&mut self, entry: Result<ignore::DirEntry, ignore::Error>) -> ignore::WalkState {
+        if let Ok(entry) = entry {
+            let meta = match entry.metadata() {
+                Ok(meta) if meta.file_type().is_file() => meta,
+                _ => return ignore::WalkState::Continue,
+            };
+
+            if self.glob.is_match(entry.path()) {
+                let item = Item {
+                    source_id: self.source_id,
+                    external_id: entry.path().to_string_lossy().to_string(),
+                    hash: None,
+                    content: None,
+                    metadata: crate::ItemMetadata {
+                        name: None,
+                        author: None,
+                        description: None,
+                        mtime: meta.modified().ok().map(OffsetDateTime::from),
+                        atime: meta.accessed().ok().map(OffsetDateTime::from),
+                    },
+                };
+
+                self.buffer.push(item);
+
+                if self.buffer.len() >= BATCH_SIZE {
+                    let output_buffer =
+                        std::mem::replace(&mut self.buffer, Vec::with_capacity(BATCH_SIZE));
+                    let send_result = self.output.send(output_buffer);
+
+                    if send_result.is_err() {
+                        // Something went wrong downstream, so there's no point in walking the FS
+                        // anymore.
+                        return ignore::WalkState::Quit;
+                    }
+                }
+            }
+        }
+
+        ignore::WalkState::Continue
+    }
+}
+
+impl Drop for FileVisitor {
+    fn drop(&mut self) {
+        if !self.buffer.is_empty() {
+            let buffer = std::mem::take(&mut self.buffer);
+            self.output.send(buffer).ok();
+        }
+    }
+}
