@@ -3,26 +3,35 @@ use std::rc::Rc;
 use ahash::HashMap;
 use instant_distance::MapItem;
 use itertools::Itertools;
+use rust_bert::pipelines::sentence_embeddings::SentenceEmbeddingsModel;
+use time::OffsetDateTime;
 
 use crate::{
     db::{Database, DbError},
+    model::Model,
     Item, ItemMetadata,
 };
 
-pub struct Search {
+#[derive(Debug, Copy, Clone)]
+pub struct SearchItem {
+    pub id: i64,
+    pub score: f32,
+}
+
+pub struct Searcher {
     hnsw: instant_distance::HnswMap<Point, i64>,
 }
 
-impl Search {
-    fn build(
+impl Searcher {
+    pub fn build(
         database: &Database,
         model_id: u32,
         model_version: u32,
-    ) -> Result<Search, eyre::Report> {
+    ) -> Result<Searcher, eyre::Report> {
         let conn = database.read_pool.get()?;
 
         let mut stmt = conn.prepare_cached(
-            r##"SELECT id, embedding
+            r##"SELECT items.id, embedding
         FROM items
         JOIN item_embeddings ie ON model_id=? AND model_version=? AND ie.item_id=items.id"##,
         )?;
@@ -47,37 +56,45 @@ impl Search {
 
         let hnsw = instant_distance::Builder::default().build(points, values);
 
-        Ok(Search { hnsw })
+        Ok(Searcher { hnsw })
     }
 
-    fn search(&self, term_embedding: &Point) -> Vec<MapItem<Point, i64>> {
+    pub fn search(&self, model: &Model, num_results: usize, query: &str) -> Vec<SearchItem> {
+        let term_embedding = Vec::from(model.encode(&[query]).unwrap()).pop().unwrap();
         let mut searcher = instant_distance::Search::default();
         let results = self
             .hnsw
-            .search(term_embedding, &mut searcher)
+            .search(&Point(term_embedding), &mut searcher)
+            .map(|item| SearchItem {
+                id: *item.value,
+                score: item.distance,
+            })
+            .take(num_results)
             .collect::<Vec<_>>();
 
         results
     }
 
-    fn search_and_retrieve(
+    pub fn search_and_retrieve(
         &self,
         database: &Database,
-        term_embedding: &Point,
-    ) -> Result<Vec<(Item, &MapItem<Point, i64>)>, DbError> {
-        let ids = self.search(term_embedding);
-        let conn = database.read_pool.get()?;
+        model: &Model,
+        num_results: usize,
+        query: &str,
+    ) -> Result<Vec<(Item, SearchItem)>, DbError> {
+        let ids = self.search(model, num_results, query);
 
         let values = ids
             .iter()
-            .map(|item| rusqlite::types::Value::from(*item.value))
+            .map(|item| rusqlite::types::Value::from(item.id))
             .collect::<Vec<_>>();
 
+        let conn = database.read_pool.get()?;
         let mut stmt = conn.prepare_cached(
             r##"SELECT id, source_id, external_id, content, name, author, description, modified, last_accessed
             FROM items WHERE id IN rarray(?)"##)?;
 
-        let rows = stmt
+        let mut rows = stmt
             .query_map([Rc::new(values)], |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
@@ -90,20 +107,26 @@ impl Search {
                             name: row.get(4)?,
                             author: row.get(5)?,
                             description: row.get(6)?,
-                            mtime: row.get(7)?,
-                            atime: row.get(8)?,
+                            mtime: row
+                                .get::<_, Option<i64>>(7)?
+                                .map(|t| OffsetDateTime::from_unix_timestamp(t).unwrap()),
+                            atime: row
+                                .get::<_, Option<i64>>(8)?
+                                .map(|t| OffsetDateTime::from_unix_timestamp(t).unwrap()),
                         },
                     },
                 ))
             })?
             .map(|row| {
                 let (id, item) = row?;
-                let result = ids.iter().find(|i| *i.value == id).unwrap();
+                let result = ids.iter().find(|i| i.id == id).copied().unwrap();
                 Ok::<_, DbError>((item, result))
             })
-            .collect::<Result<Vec<_>, DbError>>();
+            .collect::<Result<Vec<_>, DbError>>()?;
 
-        rows
+        rows.sort_unstable_by_key(|(_, result)| (result.score * 1000.0) as u32);
+
+        Ok(rows)
     }
 }
 

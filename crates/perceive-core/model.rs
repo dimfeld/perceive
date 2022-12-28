@@ -1,6 +1,6 @@
 use rust_bert::{
     pipelines::sentence_embeddings::{
-        SentenceEmbeddingsBuilder, SentenceEmbeddingsModel,
+        SentenceEmbeddingsBuilder, SentenceEmbeddingsConfig, SentenceEmbeddingsModel,
         SentenceEmbeddingsModelType as RBSentenceEmbeddingsModelType,
     },
     RustBertError,
@@ -61,7 +61,16 @@ pub struct Model {
 
 impl Model {
     pub fn new_pretrained(model_type: SentenceEmbeddingsModelType) -> Result<Model, RustBertError> {
-        let model = SentenceEmbeddingsBuilder::remote(model_type.into()).create_model()?;
+        // let model_builder = SentenceEmbeddingsBuilder::remote(model_type.into());
+        // let model_builder = model_builder.with_device(tch::Device::Mps);
+        // let model = model_builder.create_model()?;
+
+        let mut model_config =
+            SentenceEmbeddingsConfig::from(RBSentenceEmbeddingsModelType::from(model_type));
+        // #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
+        // model_config.device = tch::Device::Mps;
+
+        let model = SentenceEmbeddingsModel::new(model_config)?;
 
         Ok(Model { model_type, model })
     }

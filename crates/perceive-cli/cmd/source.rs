@@ -158,6 +158,9 @@ fn scan_source(state: &mut AppState, args: ScanSourceArgs) -> eyre::Result<()> {
     };
     update_source(&state.database, source)?;
 
+    println!("Rebuilding search");
+    state.searcher = perceive_core::search::Searcher::build(&state.database, 0, 0)?;
+
     println!("Done");
 
     Ok(())
