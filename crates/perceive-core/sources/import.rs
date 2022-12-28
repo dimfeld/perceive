@@ -261,7 +261,7 @@ fn read_items(
     rx: flume::Receiver<Vec<ScanItem>>,
     tx: flume::Sender<Vec<ScanItem>>,
 ) -> Result<(), eyre::Report> {
-    let mut sender = BatchSender::new(2, tx);
+    let mut sender = BatchSender::new(64, tx);
     for batch in rx {
         let _track = times.begin();
         for item in batch {
@@ -334,10 +334,10 @@ fn calculate_embeddings(
             .filter_map(|item| item.item.content.as_deref())
             .collect::<Vec<_>>();
 
-        // TODO Don't unwrap. What is the proper way to handle an error here?
-        // TODO Call out to some model-specific code that handles things like chunking the inputs,
-        // since these models usually truncate data over a certain length..
+        // TODO Don't unwrap. What is the proper way to handle an error here? Probably just quit
+        // the index since it indicates some larger problem.
         let mut embeddings: Vec<Vec<f32>> = if contents.is_empty() {
+            // The model doesn't like it if you feed it nothing, so just skip it.
             Vec::new()
         } else {
             model.encode(&contents).unwrap().into()

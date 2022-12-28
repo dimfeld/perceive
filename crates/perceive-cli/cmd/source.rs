@@ -108,6 +108,7 @@ fn scan_source(state: &mut AppState, args: ScanSourceArgs) -> eyre::Result<()> {
     update_source(&state.database, &state.sources[source_pos])?;
 
     let times = ScanStats::default();
+    let start_time = std::time::Instant::now();
 
     let done = AtomicBool::new(false);
     std::thread::scope(|scope| {
@@ -157,6 +158,8 @@ fn scan_source(state: &mut AppState, args: ScanSourceArgs) -> eyre::Result<()> {
         duration: (OffsetDateTime::now_utc().unix_timestamp() - now.unix_timestamp()) as u32,
     };
     update_source(&state.database, source)?;
+
+    println!("Finished in {} seconds", start_time.elapsed().as_secs());
 
     println!("Rebuilding search");
     state.searcher = perceive_core::search::Searcher::build(&state.database, 0, 0)?;

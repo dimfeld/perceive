@@ -1,9 +1,5 @@
 use std::rc::Rc;
 
-use ahash::HashMap;
-use instant_distance::MapItem;
-use itertools::Itertools;
-use rust_bert::pipelines::sentence_embeddings::SentenceEmbeddingsModel;
 use time::OffsetDateTime;
 
 use crate::{
