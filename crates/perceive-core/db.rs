@@ -10,6 +10,21 @@ use crate::paths::PROJECT_DIRS;
 pub enum DbError {
     #[error("Failed to open database: {path}: {error}")]
     Open { path: PathBuf, error: eyre::Report },
+
+    #[error("Database connection error: {0}")]
+    PoolError(#[from] r2d2::Error),
+
+    #[error("Query error: {0}")]
+    Db(#[from] rusqlite::Error),
+
+    #[error("Query error: {0}")]
+    Query(#[from] eyre::Report),
+}
+
+impl DbError {
+    pub fn query(e: impl Into<eyre::Report>) -> DbError {
+        DbError::Query(e.into())
+    }
 }
 
 #[derive(Clone)]
@@ -49,7 +64,7 @@ impl DatabaseInner {
 
         let read_manager = r2d2_sqlite::SqliteConnectionManager::file(&path)
             .with_flags(rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .with_init(|conn| rusqlite::vtab::array::load_module(&conn));
+            .with_init(|conn| rusqlite::vtab::array::load_module(conn));
         let read_pool = r2d2::Pool::new(read_manager).map_err(|error| DbError::Open {
             path: path.clone(),
             error: error.into(),
@@ -66,8 +81,8 @@ impl DatabaseInner {
             include_str!("./migrations/00001_init.sql"),
         )]);
 
-        conn.pragma_update(None, "journal_mode", "WAL")?;
-        conn.pragma_update(None, "synchrounous", "NORMAL")?;
+        conn.pragma_update(None, "journal", "wal")?;
+        conn.pragma_update(None, "synchronous", "normal")?;
 
         migrations.to_latest(conn)?;
         Ok(())

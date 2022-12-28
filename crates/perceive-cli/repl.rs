@@ -5,10 +5,7 @@ use eyre::eyre;
 use rustyline::{error::ReadlineError, Editor};
 use thiserror::Error;
 
-use crate::{
-    cmd::{add::AddArgs, model::ModelArgs},
-    AppState, Args,
-};
+use crate::{AppState, Args};
 
 #[derive(Error, Debug)]
 enum ReplError {
@@ -29,8 +26,7 @@ fn command() -> Command {
         .arg_required_else_help(true)
         .subcommand_required(true)
         .subcommand(Command::new("exit").alias("quit").about("Exit the REPL"))
-        .subcommand(AddArgs::augment_args(Command::new("add")))
-        .subcommand(ModelArgs::augment_args(Command::new("model")))
+    // .subcommand(ModelArgs::augment_args(Command::new("model")))
 }
 
 fn to_args<T: FromArgMatches>(matches: &ArgMatches) -> Result<T, clap::Error> {
@@ -41,7 +37,12 @@ fn to_args<T: FromArgMatches>(matches: &ArgMatches) -> Result<T, clap::Error> {
 }
 
 pub fn repl(mut state: AppState) -> Result<(), eyre::Report> {
+    let history_path = perceive_core::paths::PROJECT_DIRS
+        .data_local_dir()
+        .join("repl-history.txt");
     let mut rl = Editor::<()>::new()?;
+    rl.load_history(&history_path).ok();
+
     loop {
         let input = rl.readline("> ");
 
@@ -51,7 +52,10 @@ pub fn repl(mut state: AppState) -> Result<(), eyre::Report> {
                 rl.add_history_entry(line);
                 line
             }
-            Err(ReadlineError::Interrupted) | Err(ReadlineError::Eof) => break,
+            Err(ReadlineError::Interrupted) | Err(ReadlineError::Eof) => {
+                rl.save_history(&history_path).ok();
+                break;
+            }
             Err(e) => return Err(eyre!("{}", e)),
         };
 
@@ -59,20 +63,19 @@ pub fn repl(mut state: AppState) -> Result<(), eyre::Report> {
             continue;
         }
 
+        rl.add_history_entry(line);
+
         match parse(line) {
             Ok(matches) => {
                 let result = match matches.subcommand() {
                     Some(("quit" | "exit", _)) => {
+                        rl.save_history(&history_path).ok();
                         break;
                     }
-                    Some(("add", matches)) => {
-                        let args = to_args::<crate::cmd::add::AddArgs>(matches)?;
-                        crate::cmd::add::add_term(&mut state, args)
-                    }
-                    Some(("model", matches)) => {
-                        let args = to_args::<crate::cmd::model::ModelArgs>(matches)?;
-                        crate::cmd::model::model(&mut state, args)
-                    }
+                    // Some(("model", matches)) => {
+                    //     let args = to_args::<crate::cmd::model::ModelArgs>(matches)?;
+                    //     crate::cmd::model::model(&mut state, args)
+                    // }
                     _ => {
                         let args = to_args::<Args>(&matches)?;
 

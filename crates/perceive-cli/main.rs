@@ -23,7 +23,7 @@ fn main() -> Result<()> {
     color_eyre::install().unwrap();
 
     let args = Args::parse();
-    let mut state = AppState::new();
+    let mut state = AppState::new(args.database.clone())?;
 
     match args.command {
         Some(cmd) => cmd::handle_command(&mut state, cmd)?,

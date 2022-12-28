@@ -1,28 +1,33 @@
+pub mod db;
 mod fs;
-mod scan;
+pub mod import;
 
 use serde::{Deserialize, Serialize};
+use strum::{Display, EnumString};
 use time::OffsetDateTime;
 
-use self::{fs::FsSourceConfig, scan::SourceScanner};
-use crate::Item;
+pub use self::fs::FsSourceConfig;
+use self::import::SourceScanner;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum SourceConfig {
     Fs(FsSourceConfig),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum SourceStatus {
     Indexing { started_at: i64 },
-    Ready { num_indexed: u64 },
+    Ready { scanned: u32, duration: u32 },
     Error { error: String },
 }
 
-#[derive(Debug, Default, Copy, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(
+    Debug, Default, Display, EnumString, Copy, Clone, Serialize, Deserialize, PartialEq, Eq,
+)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum ItemCompareStrategy {
     #[default]
     MTimeAndContent,
@@ -46,7 +51,7 @@ impl ItemCompareStrategy {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Source {
     pub id: i64,
     pub name: String,
@@ -56,7 +61,6 @@ pub struct Source {
     pub status: SourceStatus,
     pub last_indexed: OffsetDateTime,
     pub index_version: i64,
-    pub preferred_model: i64,
 }
 
 impl Source {

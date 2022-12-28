@@ -1,6 +1,6 @@
 use clap::Args;
 use eyre::Result;
-use pcore::SentenceEmbeddingsModelType;
+use pcore::model::SentenceEmbeddingsModelType;
 use perceive_core as pcore;
 use tch::IndexOp;
 
@@ -13,6 +13,7 @@ pub struct SearchArgs {
 }
 
 pub fn search(state: &mut AppState, args: SearchArgs) -> Result<()> {
+    /*
     let mut sentences = Vec::with_capacity(state.candidates.len() + 1);
     sentences.push(args.query.as_str());
     sentences.extend(state.candidates.iter().map(|s| s.as_str()));
@@ -45,6 +46,7 @@ pub fn search(state: &mut AppState, args: SearchArgs) -> Result<()> {
     for (sentence, score) in results {
         println!("{sentence:<20} {score:.2}");
     }
+    */
 
     Ok(())
 }

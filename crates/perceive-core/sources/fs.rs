@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use super::scan::SourceScanner;
+use super::import::{FoundItem, SourceScanner, SourceScannerReadResult};
 use crate::{batch_sender::BatchSender, Item};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -41,7 +41,11 @@ impl SourceScanner for FileScanner {
         Ok(())
     }
 
-    fn read(&self, mut item: Item) -> Result<Option<Item>, eyre::Report> {
+    fn read(
+        &self,
+        _existing: Option<&FoundItem>,
+        mut item: Item,
+    ) -> Result<(SourceScannerReadResult, Item), eyre::Report> {
         let Ok(content) = std::fs::read_to_string(std::path::Path::new(&item.external_id)) else {
             // Currently we just return None if reading fails. This includes where the file
             // is a binary file that can't be converted to UTF-8. In the future we should
@@ -49,11 +53,11 @@ impl SourceScanner for FileScanner {
             //
             // Future iterations of this will also try to process other file formats that aren't plain
             // text but do contain text (i.e. Word, Pages, etc.).
-            return Ok(None);
+            return Ok((SourceScannerReadResult::Skip, item));
         };
 
         item.content = Some(content);
-        Ok(Some(item))
+        Ok((SourceScannerReadResult::Found, item))
     }
 }
 
@@ -89,7 +93,10 @@ impl ignore::ParallelVisitor for FileVisitor {
                 _ => return ignore::WalkState::Continue,
             };
 
-            if self.glob.is_match(entry.path()) {
+            let path = entry.path();
+            let is_match = self.glob.is_match(path);
+
+            if is_match {
                 let item = Item {
                     source_id: self.source_id,
                     external_id: entry.path().to_string_lossy().to_string(),
