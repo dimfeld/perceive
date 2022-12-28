@@ -2,6 +2,7 @@ pub mod batch_sender;
 pub mod db;
 pub mod model;
 pub mod paths;
+pub mod search;
 pub mod sources;
 pub mod time_tracker;
 

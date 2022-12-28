@@ -8,7 +8,8 @@ use rusqlite::{named_params, params, types::Value};
 
 use super::{ItemCompareStrategy, Source};
 use crate::{
-    batch_sender::BatchSender, db::Database, model::Model, time_tracker::TimeTracker, Item,
+    batch_sender::BatchSender, db::Database, model::Model, search::serialize_embedding,
+    time_tracker::TimeTracker, Item,
 };
 
 /// Data returned when the source scanner tries to read an item.
@@ -442,12 +443,7 @@ fn update_db(
                             ":last_accessed": item.item.metadata.atime.map(|t| t.unix_timestamp()),
                         })?;
 
-                        let mut bytes_vec =
-                            Vec::with_capacity(embedding.len() * std::mem::size_of::<f32>());
-                        for value in embedding {
-                            bytes_vec.extend(value.to_le_bytes());
-                        }
-
+                        let bytes_vec = serialize_embedding(embedding);
                         embedding_update_stmt.execute(named_params! {
                             ":embedding": &bytes_vec,
                             ":version": index_version,
