@@ -86,8 +86,8 @@ pub fn scan_source(
     times: &ScanStats,
     database: &Database,
     model: Model,
-    model_id: i64,
-    model_version: i64,
+    model_id: u32,
+    model_version: u32,
     source: &Source,
 ) -> Model {
     let scanner = source.create_scanner();
@@ -370,8 +370,8 @@ fn calculate_embeddings(
 }
 
 fn update_db(
-    model_id: i64,
-    model_version: i64,
+    model_id: u32,
+    model_version: u32,
     stats: &ScanStats,
     database: &Database,
     index_version: i64,

@@ -8,6 +8,8 @@ use perceive_core::{
 
 pub struct AppState {
     pub model: Option<Model>,
+    pub model_id: u32,
+    pub model_version: u32,
     pub database: Database,
     pub sources: Vec<Source>,
     pub searcher: perceive_core::search::Searcher,
@@ -17,14 +19,19 @@ impl AppState {
     pub fn new(db_path: Option<PathBuf>) -> Result<Self, eyre::Report> {
         let db = Database::new(db_path)?;
 
+        let model_id = 5;
+        let model_version = 0;
+
         let sources = perceive_core::sources::db::list_sources(&db)?;
         println!("Building search...");
-        let searcher = perceive_core::search::Searcher::build(&db, 0, 0)?;
+        let searcher = perceive_core::search::Searcher::build(&db, model_id, model_version)?;
 
         Ok(AppState {
             model: Some(Model::new_pretrained(
-                SentenceEmbeddingsModelType::AllMiniLmL12V2,
+                SentenceEmbeddingsModelType::MsMarcoDistilbertBaseV4,
             )?),
+            model_id,
+            model_version,
             database: db,
             searcher,
             sources,

@@ -1,5 +1,4 @@
-[target.aarch64-apple-darwin]
-
-# Needed to find libtorch when installed through Homebrew
-rustflags = "-L /opt/homebrew/opt/pytorch/lib"
-
+[env]
+LIBTORCH = { value = "torch" , relative = true }
+DYLD_LIBRARY_PATH = { value = "torch/lib" , relative = true }
+CARGO_WORKSPACE_DIR = { value = "", relative = true }

@@ -56,6 +56,10 @@ impl SourceScanner for FileScanner {
             return Ok((SourceScannerReadResult::Skip, item));
         };
 
+        if content.trim().is_empty() {
+            return Ok((SourceScannerReadResult::Skip, item));
+        }
+
         item.content = Some(content);
         Ok((SourceScannerReadResult::Found, item))
     }

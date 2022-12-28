@@ -2,18 +2,21 @@
 // https://github.com/guillaume-be/rust-bert/blob/master/src/pipelines/sentence_embeddings/pipeline.rs,
 // with some modifications to work with longer text passages.
 
+use std::path::PathBuf;
+
+use once_cell::sync::Lazy;
 use rust_bert::{
     pipelines::{
-        common::{ConfigOption, TokenizerOption},
+        common::{ConfigOption, ModelType, TokenizerOption},
         sentence_embeddings::{
             layers::{Dense, DenseConfig, Pooling, PoolingConfig},
-            SentenceEmbeddingsBuilder, SentenceEmbeddingsConfig, SentenceEmbeddingsModel,
-            SentenceEmbeddingsModelType as RBSentenceEmbeddingsModelType,
+            SentenceEmbeddingsConfig, SentenceEmbeddingsModelType as RBSentenceEmbeddingsModelType,
             SentenceEmbeddingsModulesConfig, SentenceEmbeddingsOption,
             SentenceEmbeddingsSentenceBertConfig, SentenceEmbeddingsTokenizerConfig,
             SentenceEmbeddingsTokenizerOuput,
         },
     },
+    resources::{LocalResource, ResourceProvider},
     Config, RustBertError,
 };
 use rust_tokenizers::tokenizer::TruncationStrategy;
@@ -42,28 +45,76 @@ pub enum SentenceEmbeddingsModelType {
     DistiluseBaseMultilingualCased,
     AllDistilrobertaV1,
     ParaphraseAlbertSmallV2,
+    MsMarcoDistilbertBaseV4,
+    MsMarcoDistilbertBaseTasB,
 }
 
-impl From<SentenceEmbeddingsModelType> for RBSentenceEmbeddingsModelType {
-    fn from(value: SentenceEmbeddingsModelType) -> Self {
-        match value {
-            SentenceEmbeddingsModelType::DistiluseBaseMultilingualCased => {
-                RBSentenceEmbeddingsModelType::DistiluseBaseMultilingualCased
+impl SentenceEmbeddingsModelType {
+    fn config(&self) -> SentenceEmbeddingsConfig {
+        match self {
+            SentenceEmbeddingsModelType::AllMiniLmL6V2 => {
+                SentenceEmbeddingsConfig::from(RBSentenceEmbeddingsModelType::AllMiniLmL6V2)
             }
             SentenceEmbeddingsModelType::AllMiniLmL12V2 => {
-                RBSentenceEmbeddingsModelType::AllMiniLmL12V2
+                SentenceEmbeddingsConfig::from(RBSentenceEmbeddingsModelType::AllMiniLmL12V2)
             }
-            SentenceEmbeddingsModelType::AllMiniLmL6V2 => {
-                RBSentenceEmbeddingsModelType::AllMiniLmL6V2
+            SentenceEmbeddingsModelType::DistiluseBaseMultilingualCased => {
+                SentenceEmbeddingsConfig::from(
+                    RBSentenceEmbeddingsModelType::DistiluseBaseMultilingualCased,
+                )
             }
             SentenceEmbeddingsModelType::AllDistilrobertaV1 => {
-                RBSentenceEmbeddingsModelType::AllDistilrobertaV1
+                SentenceEmbeddingsConfig::from(RBSentenceEmbeddingsModelType::AllDistilrobertaV1)
             }
-            SentenceEmbeddingsModelType::ParaphraseAlbertSmallV2 => {
-                RBSentenceEmbeddingsModelType::ParaphraseAlbertSmallV2
+            SentenceEmbeddingsModelType::ParaphraseAlbertSmallV2 => SentenceEmbeddingsConfig::from(
+                RBSentenceEmbeddingsModelType::ParaphraseAlbertSmallV2,
+            ),
+            SentenceEmbeddingsModelType::MsMarcoDistilbertBaseV4 => {
+                msmarco_distilbert_base_v4_config()
+            }
+            SentenceEmbeddingsModelType::MsMarcoDistilbertBaseV4 => {
+                msmarco_distilbert_base_tas_b_config()
             }
         }
     }
+}
+
+// TODO get this from a runtime value indicating where the app was installed
+static MODEL_DATA_DIR: Lazy<String> =
+    Lazy::new(|| format!("{}model_data", env!("CARGO_WORKSPACE_DIR")));
+
+fn local_resource(model: &str, file: &str) -> Box<dyn ResourceProvider + Send> {
+    let dir = Lazy::force(&MODEL_DATA_DIR);
+    Box::new(LocalResource::from(PathBuf::from(format!(
+        "{dir}/{model}/{file}",
+    ))))
+}
+
+fn model_config(model_name: &str, has_dense: bool, has_merges: bool) -> SentenceEmbeddingsConfig {
+    let lr = |file: &str| local_resource(model_name, file);
+
+    SentenceEmbeddingsConfig {
+        modules_config_resource: lr("modules.json"),
+        transformer_type: ModelType::DistilBert,
+        transformer_config_resource: lr("config.json"),
+        transformer_weights_resource: lr("rust_model.ot"),
+        pooling_config_resource: lr("1_Pooling/config.json"),
+        dense_config_resource: has_dense.then(|| lr("2_Dense/config.json")),
+        dense_weights_resource: has_dense.then(|| lr("2_Dense/rust_model.ot")),
+        sentence_bert_config_resource: lr("sentence_bert_config.json"),
+        tokenizer_config_resource: lr("tokenizer_config.json"),
+        tokenizer_vocab_resource: lr("vocab.txt"),
+        tokenizer_merges_resource: has_merges.then(|| lr("merges.txt")),
+        device: tch::Device::cuda_if_available(),
+    }
+}
+
+fn msmarco_distilbert_base_v4_config() -> SentenceEmbeddingsConfig {
+    model_config("msmarco-distilbert-base-v4", false, false)
+}
+
+fn msmarco_distilbert_base_tas_b_config() -> SentenceEmbeddingsConfig {
+    model_config("msmarco-distilbert-base-tas-b", false, false)
 }
 
 pub struct Model {
@@ -74,7 +125,6 @@ pub struct Model {
     tokenizer_truncation_strategy: TruncationStrategy,
     var_store: nn::VarStore,
     transformer: SentenceEmbeddingsOption,
-    transformer_config: ConfigOption,
     pooling_layer: Pooling,
     dense_layer: Option<Dense>,
     normalize_embeddings: bool,
@@ -95,7 +145,7 @@ impl Model {
             dense_config_resource,
             dense_weights_resource,
             device,
-        } = SentenceEmbeddingsConfig::from(RBSentenceEmbeddingsModelType::from(model_type));
+        } = model_type.config();
 
         let modules =
             SentenceEmbeddingsModulesConfig::from_file(modules_config_resource.get_local_path()?)
@@ -130,7 +180,7 @@ impl Model {
 
         // Setup transformer
 
-        let mut var_store = nn::VarStore::new(device);
+        let mut var_store = nn::VarStore::new(tch::Device::cuda_if_available());
         let transformer_config = ConfigOption::from_file(
             transformer_type,
             transformer_config_resource.get_local_path()?,
@@ -173,7 +223,6 @@ impl Model {
             tokenizer_truncation_strategy: TruncationStrategy::LongestFirst,
             var_store,
             transformer,
-            transformer_config,
             pooling_layer,
             dense_layer,
             normalize_embeddings,

@@ -143,8 +143,8 @@ fn scan_source(state: &mut AppState, args: ScanSourceArgs) -> eyre::Result<()> {
             &times,
             &state.database,
             model,
-            0,
-            0,
+            state.model_id,
+            state.model_version,
             &state.sources[source_pos],
         );
 
@@ -162,7 +162,11 @@ fn scan_source(state: &mut AppState, args: ScanSourceArgs) -> eyre::Result<()> {
     println!("Finished in {} seconds", start_time.elapsed().as_secs());
 
     println!("Rebuilding search");
-    state.searcher = perceive_core::search::Searcher::build(&state.database, 0, 0)?;
+    state.searcher = perceive_core::search::Searcher::build(
+        &state.database,
+        state.model_id,
+        state.model_version,
+    )?;
 
     println!("Done");
 
