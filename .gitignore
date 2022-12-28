@@ -15,5 +15,5 @@ Cargo.lock
 
 /target
 
-/libtorch
-/torch-install
+/model_data
+/torch

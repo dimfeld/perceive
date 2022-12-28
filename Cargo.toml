@@ -1,5 +1,6 @@
 [workspace]
 members = ["crates/*"]
+exclude = ["model_data/rust-bert"]
 
 [profile.release]
 debug = 1
