@@ -58,17 +58,14 @@ impl Searcher {
     pub fn search(&self, model: &Model, num_results: usize, query: &str) -> Vec<SearchItem> {
         let term_embedding = Vec::from(model.encode(&[query]).unwrap()).pop().unwrap();
         let mut searcher = instant_distance::Search::default();
-        let results = self
-            .hnsw
+        self.hnsw
             .search(&Point(term_embedding), &mut searcher)
             .map(|item| SearchItem {
                 id: *item.value,
                 score: item.distance,
             })
             .take(num_results)
-            .collect::<Vec<_>>();
-
-        results
+            .collect::<Vec<_>>()
     }
 
     pub fn search_and_retrieve(
@@ -78,9 +75,9 @@ impl Searcher {
         num_results: usize,
         query: &str,
     ) -> Result<Vec<(Item, SearchItem)>, DbError> {
-        let ids = self.search(model, num_results, query);
+        let items = self.search(model, num_results, query);
 
-        let values = ids
+        let values = items
             .iter()
             .map(|item| rusqlite::types::Value::from(item.id))
             .collect::<Vec<_>>();
@@ -115,12 +112,12 @@ impl Searcher {
             })?
             .map(|row| {
                 let (id, item) = row?;
-                let result = ids.iter().find(|i| i.id == id).copied().unwrap();
+                let result = items.iter().find(|i| i.id == id).copied().unwrap();
                 Ok::<_, DbError>((item, result))
             })
             .collect::<Result<Vec<_>, DbError>>()?;
 
-        rows.sort_unstable_by_key(|(_, result)| (result.score * 1000.0) as u32);
+        rows.sort_unstable_by(|a, b| a.1.score.partial_cmp(&b.1.score).unwrap());
 
         Ok(rows)
     }
