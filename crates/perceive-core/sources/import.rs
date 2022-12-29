@@ -6,6 +6,7 @@ use std::{
 
 use ahash::HashMap;
 use itertools::Itertools;
+use rayon::prelude::*;
 use rusqlite::{named_params, params, types::Value};
 
 use super::{ItemCompareStrategy, Source};
@@ -208,7 +209,7 @@ fn match_to_existing_items(
     let compare_mtime = compare_strategy.should_compare_mtime();
     let mtime_is_sufficient = compare_strategy == ItemCompareStrategy::MTime;
 
-    let mut sender = BatchSender::new(32, tx);
+    let sender = BatchSender::new(32, tx);
     for batch in rx {
         stats
             .scanned
@@ -286,58 +287,62 @@ fn read_items(
     rx: flume::Receiver<Vec<ScanItem>>,
     tx: flume::Sender<Vec<ScanItem>>,
 ) -> Result<(), eyre::Report> {
-    let mut sender = BatchSender::new(64, tx);
+    let sender = BatchSender::new(64, tx);
     for batch in rx {
         let _track = times.begin();
-        for item in batch {
-            let ScanItem { item, state } = item;
 
-            let existing = match &state {
-                ScanItemState::New => None,
-                ScanItemState::Found(found) => Some(found),
-                ScanItemState::Changed(found) => Some(found),
-                ScanItemState::Unchanged { .. } => {
-                    sender.add(ScanItem { item, state })?;
-                    continue;
-                }
-            };
+        batch
+            .into_par_iter()
+            .try_for_each_with(sender.clone(), |sender, item| {
+                let ScanItem { item, state } = item;
 
-            let (item, state) = match scanner.read(existing, item) {
-                Ok((SourceScannerReadResult::Found, item)) => (item, state),
-                Ok((SourceScannerReadResult::Unchanged, item)) => {
-                    if let Some(id) = state.item_id() {
-                        (item, ScanItemState::Unchanged { id })
-                    } else {
-                        // The scanner said the item was unchanged, but we also don't have an
-                        // existing one. Just skip it.
-                        continue;
+                let existing = match &state {
+                    ScanItemState::New => None,
+                    ScanItemState::Found(found) => Some(found),
+                    ScanItemState::Changed(found) => Some(found),
+                    ScanItemState::Unchanged { .. } => {
+                        sender.add(ScanItem { item, state })?;
+                        return Ok(());
                     }
-                }
-                Ok((SourceScannerReadResult::Skip, _)) => {
-                    continue;
-                }
-                // TODO - handle errors
-                Err(_) => continue,
-            };
+                };
 
-            let compare_content = compare_strategy.should_compare_content();
-            let state = match state {
-                ScanItemState::New => ScanItemState::New,
-                ScanItemState::Found(found) => {
-                    if compare_content
-                        && found.content != item.content.as_deref().unwrap_or_default()
-                    {
-                        ScanItemState::Changed(found)
-                    } else {
-                        ScanItemState::Unchanged { id: found.id }
+                let (item, state) = match scanner.read(existing, item) {
+                    Ok((SourceScannerReadResult::Found, item)) => (item, state),
+                    Ok((SourceScannerReadResult::Unchanged, item)) => {
+                        if let Some(id) = state.item_id() {
+                            (item, ScanItemState::Unchanged { id })
+                        } else {
+                            // The scanner said the item was unchanged, but we also don't have an
+                            // existing one. Just skip it.
+                            return Ok(());
+                        }
                     }
-                }
-                ScanItemState::Changed(found) => ScanItemState::Changed(found),
-                ScanItemState::Unchanged { .. } => unreachable!(),
-            };
+                    Ok((SourceScannerReadResult::Skip, _)) => {
+                        return Ok(());
+                    }
+                    // TODO - handle errors
+                    Err(_) => return Ok(()),
+                };
 
-            sender.add(ScanItem { state, item }).unwrap();
-        }
+                let compare_content = compare_strategy.should_compare_content();
+                let state = match state {
+                    ScanItemState::New => ScanItemState::New,
+                    ScanItemState::Found(found) => {
+                        if compare_content
+                            && found.content != item.content.as_deref().unwrap_or_default()
+                        {
+                            ScanItemState::Changed(found)
+                        } else {
+                            ScanItemState::Unchanged { id: found.id }
+                        }
+                    }
+                    ScanItemState::Changed(found) => ScanItemState::Changed(found),
+                    ScanItemState::Unchanged { .. } => unreachable!(),
+                };
+
+                sender.add(ScanItem { state, item })?;
+                Ok::<_, eyre::Report>(())
+            })?;
     }
 
     Ok(())
@@ -349,7 +354,7 @@ fn calculate_embeddings(
     rx: flume::Receiver<Vec<ScanItem>>,
     tx: flume::Sender<Vec<(ScanItem, Option<Vec<f32>>)>>,
 ) -> Result<Model, (Model, eyre::Report)> {
-    let mut sender = BatchSender::new(2, tx);
+    let sender = BatchSender::new(2, tx);
     for batch in rx {
         let _track = stats.encode_time.begin();
 

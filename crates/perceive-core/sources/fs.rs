@@ -137,12 +137,6 @@ impl ignore::ParallelVisitor for FileVisitor {
     }
 }
 
-impl Drop for FileVisitor {
-    fn drop(&mut self) {
-        self.sender.flush().ok();
-    }
-}
-
 #[derive(Debug, Deserialize)]
 struct FileAttributes {
     title: Option<String>,
