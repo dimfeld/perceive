@@ -35,13 +35,13 @@ pub fn dot_product(set1: &Tensor, set2: &Tensor) -> Tensor {
 }
 
 pub fn cosine_similarity_single_query(query: &Tensor, matches: &Tensor) -> Tensor {
-    let query = query / query.linalg_norm(2.0, vec![0i64].as_slice(), true, Kind::Float);
-    let matches = matches / matches.linalg_norm(2.0, vec![1i64].as_slice(), true, Kind::Float);
+    let query = query / query.linalg_norm(2.0, [0i64].as_slice(), true, Kind::Float);
+    let matches = matches / matches.linalg_norm(2.0, [1i64].as_slice(), true, Kind::Float);
     dot_product(&query, &matches)
 }
 
 pub fn cosine_similarity_multi_query(set1: &Tensor, set2: &Tensor) -> Tensor {
-    let set1 = set1 / set1.linalg_norm(2.0, vec![1i64].as_slice(), true, Kind::Float);
-    let set2 = set2 / set2.linalg_norm(2.0, vec![1i64].as_slice(), true, Kind::Float);
+    let set1 = set1 / set1.linalg_norm(2.0, [1i64].as_slice(), true, Kind::Float);
+    let set2 = set2 / set2.linalg_norm(2.0, [1i64].as_slice(), true, Kind::Float);
     dot_product(&set1, &set2)
 }
