@@ -60,7 +60,15 @@ impl SourceScanner for FileScanner {
             return Ok((SourceScannerReadResult::Skip, item));
         }
 
+        let parser = gray_matter::Matter::<gray_matter::engine::YAML>::new();
+        if let Some(parsed) = parser.parse_with_struct::<FileAttributes>(&content) {
+            item.metadata.name = parsed.data.title.or(parsed.data.name);
+            item.metadata.description = parsed.data.description.or(parsed.data.summary);
+            item.metadata.author = parsed.data.author;
+        }
+
         item.content = Some(content);
+
         Ok((SourceScannerReadResult::Found, item))
     }
 }
@@ -132,4 +140,13 @@ impl Drop for FileVisitor {
     fn drop(&mut self) {
         self.sender.flush().ok();
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct FileAttributes {
+    title: Option<String>,
+    author: Option<String>,
+    name: Option<String>,
+    summary: Option<String>,
+    description: Option<String>,
 }

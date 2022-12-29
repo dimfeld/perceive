@@ -20,8 +20,9 @@ pub fn search(state: &mut AppState, args: SearchArgs) -> Result<()> {
         &args.query,
     )?;
 
-    for result in results {
-        println!("{:.2}: {}", result.1.score, result.0.external_id);
+    for (result, item) in results {
+        let desc = result.metadata.name.as_ref().unwrap_or(&result.external_id);
+        println!("{:.2}: {}", item.score, desc);
     }
 
     Ok(())
