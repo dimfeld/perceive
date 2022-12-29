@@ -1,9 +1,11 @@
 use std::{
+    borrow::Cow,
     rc::Rc,
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use ahash::HashMap;
+use itertools::Itertools;
 use rusqlite::{named_params, params, types::Value};
 
 use super::{ItemCompareStrategy, Source};
@@ -349,7 +351,26 @@ fn calculate_embeddings(
         let contents = batch
             .iter()
             .filter(|item| matches!(item.state, ScanItemState::New | ScanItemState::Changed(_)))
-            .filter_map(|item| item.item.content.as_deref())
+            .filter_map(|item| {
+                if item.item.metadata.name.is_none() && item.item.metadata.description.is_none() {
+                    return item.item.content.as_deref().map(Cow::Borrowed);
+                }
+
+                let document = [
+                    item.item.metadata.name.as_deref(),
+                    item.item.metadata.description.as_deref(),
+                    item.item.content.as_deref(),
+                ]
+                .into_iter()
+                .flatten()
+                .join("\n");
+
+                if document.is_empty() {
+                    None
+                } else {
+                    Some(Cow::Owned(document))
+                }
+            })
             .collect::<Vec<_>>();
 
         // TODO Don't unwrap. What is the proper way to handle an error here? Probably just quit

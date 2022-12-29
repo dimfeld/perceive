@@ -65,9 +65,10 @@ impl SourceScanner for FileScanner {
             item.metadata.name = parsed.data.title.or(parsed.data.name);
             item.metadata.description = parsed.data.description.or(parsed.data.summary);
             item.metadata.author = parsed.data.author;
+            item.content = Some(parsed.content);
+        } else {
+            item.content = Some(content);
         }
-
-        item.content = Some(content);
 
         Ok((SourceScannerReadResult::Found, item))
     }

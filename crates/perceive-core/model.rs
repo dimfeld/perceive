@@ -4,6 +4,7 @@
 
 mod configs;
 mod highlight;
+pub mod tokenize;
 
 pub use configs::SentenceEmbeddingsModelType;
 use rust_bert::{
@@ -133,64 +134,12 @@ impl Model {
         })
     }
 
-    /// Tokenizes the inputs
-    fn tokenize<S>(&self, inputs: &[S]) -> SentenceEmbeddingsTokenizerOuput
-    where
-        S: AsRef<str> + Sync,
-    {
-        let tokenized_input = self.tokenizer.encode_list(
-            inputs,
-            self.sentence_bert_config.max_seq_length,
-            &self.tokenizer_truncation_strategy,
-            0,
-        );
-
-        let max_len = tokenized_input
-            .iter()
-            .map(|input| input.token_ids.len())
-            .max()
-            .unwrap_or(0);
-
-        let pad_token_id = self.tokenizer.get_pad_id().unwrap_or(0);
-        let tokens_ids = tokenized_input
-            .into_iter()
-            .map(|input| {
-                let mut token_ids = input.token_ids;
-                token_ids.extend(vec![pad_token_id; max_len - token_ids.len()]);
-                token_ids
-            })
-            .collect::<Vec<_>>();
-
-        let tokens_masks = tokens_ids
-            .iter()
-            .map(|input| {
-                Tensor::of_slice(
-                    &input
-                        .iter()
-                        .map(|&e| i64::from(e != pad_token_id))
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .collect::<Vec<_>>();
-
-        let tokens_ids = tokens_ids
-            .into_iter()
-            .map(|input| Tensor::of_slice(&(input)))
-            .collect::<Vec<_>>();
-
-        SentenceEmbeddingsTokenizerOuput {
-            tokens_ids,
-            tokens_masks,
-        }
-    }
-
-    pub fn encode<S: AsRef<str> + Sync>(&self, inputs: &[S]) -> Result<Tensor, RustBertError> {
-        let SentenceEmbeddingsTokenizerOuput {
-            tokens_ids,
-            tokens_masks,
-        } = self.tokenize(inputs);
-        let tokens_ids = Tensor::stack(&tokens_ids, 0).to(self.var_store.device());
-        let tokens_masks = Tensor::stack(&tokens_masks, 0).to(self.var_store.device());
+    pub fn encode_tokens(
+        &self,
+        tokens: &SentenceEmbeddingsTokenizerOuput,
+    ) -> Result<Tensor, RustBertError> {
+        let tokens_ids = Tensor::stack(&tokens.tokens_ids, 0).to(self.var_store.device());
+        let tokens_masks = Tensor::stack(&tokens.tokens_masks, 0).to(self.var_store.device());
 
         let (tokens_embeddings, _all_attentions) =
             tch::no_grad(|| self.transformer.forward(&tokens_ids, &tokens_masks))?;
@@ -213,6 +162,11 @@ impl Model {
         };
 
         Ok(maybe_normalized)
+    }
+
+    pub fn encode<S: AsRef<str> + Sync>(&self, inputs: &[S]) -> Result<Tensor, RustBertError> {
+        let tokens = self.tokenize(inputs);
+        self.encode_tokens(&tokens)
     }
 }
 
