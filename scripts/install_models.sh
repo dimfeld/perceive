@@ -19,7 +19,7 @@ for path in $MODELS; do
   REPO_ORG=${array[0]}
   MODEL=${array[1]}
 
-  cd $BASE_DIR/$MODEL
+  cd $BASE_DIR
   if [ -d "$MODEL" ]; then
     continue;
   fi
@@ -28,7 +28,7 @@ for path in $MODELS; do
   cd $MODEL
 
   CONVERT_ARGS=
-  if [[ $model == *"distilbert"* ]]; then
+  if [[ $MODEL == *"distilbert"* ]]; then
     CONVERT_ARGS="--prefix distilbert."
   fi
 
