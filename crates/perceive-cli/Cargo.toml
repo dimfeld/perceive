@@ -16,6 +16,7 @@ color-eyre = "0.6.2"
 dialoguer = { version = "0.10.2", features = ["fuzzy-select"] }
 eyre = "0.6.8"
 indicatif = "0.17.2"
+owo-colors = "3.5.0"
 "perceive-core" = { path = "../perceive-core", features = ["clap"] }
 rusqlite = { version = "0.28.0", features = ["array", "bundled", "blob"] }
 rustyline = { version = "10.0.0", features = ["case_insensitive_history_search"] }

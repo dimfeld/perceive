@@ -1,5 +1,6 @@
 use clap::Args;
 use eyre::Result;
+use owo_colors::OwoColorize;
 
 use crate::AppState;
 
@@ -20,9 +21,19 @@ pub fn search(state: &mut AppState, args: SearchArgs) -> Result<()> {
         &args.query,
     )?;
 
-    for (result, item) in results {
+    let result_docs = results
+        .iter()
+        .map(|r| r.0.content.as_deref().unwrap_or_default())
+        .collect::<Vec<_>>();
+
+    let highlights = state
+        .highlights_model
+        .highlight(&args.query, &result_docs)?;
+
+    for (index, (result, item)) in results.iter().enumerate() {
         let desc = result.metadata.name.as_ref().unwrap_or(&result.external_id);
-        println!("{:.2}: {}", item.score, desc);
+        let highlight = highlights[index].replace('\n', "•");
+        println!("{:.2}: {} - {highlight}", item.score.abs(), desc.bold());
     }
 
     Ok(())
