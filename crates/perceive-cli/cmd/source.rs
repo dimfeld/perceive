@@ -4,7 +4,7 @@ use clap::{Args, Subcommand};
 use eyre::eyre;
 use indicatif::ProgressBar;
 use perceive_core::sources::{
-    db::update_source, import::ScanStats, FsSourceConfig, Source, SourceConfig,
+    db::update_source, import::ScanStats, FsSourceConfig, ItemCompareStrategy, Source, SourceConfig,
 };
 use time::OffsetDateTime;
 
@@ -44,6 +44,12 @@ pub struct EditSourceArgs {
 pub struct ScanSourceArgs {
     /// The name of the source
     pub name: String,
+    /// Set to always check by content, even if the dates are the same.
+    #[clap(long)]
+    pub by_content: bool,
+    /// Reindex all items, even if they haven't changed.
+    #[clap(short, long, conflicts_with("by_content"))]
+    pub force: bool,
 }
 
 pub fn handle_source_command(state: &mut AppState, cmd: SourceArgs) -> eyre::Result<()> {
@@ -139,6 +145,14 @@ fn scan_source(state: &mut AppState, args: ScanSourceArgs) -> eyre::Result<()> {
 
         let model = state.loan_model();
 
+        let compare_strategy = if args.force {
+            Some(ItemCompareStrategy::Always)
+        } else if args.by_content {
+            Some(ItemCompareStrategy::Content)
+        } else {
+            None
+        };
+
         let model = perceive_core::sources::import::scan_source(
             &times,
             &state.database,
@@ -146,6 +160,7 @@ fn scan_source(state: &mut AppState, args: ScanSourceArgs) -> eyre::Result<()> {
             state.model_id,
             state.model_version,
             &state.sources[source_pos],
+            compare_strategy,
         );
 
         state.return_model(model);

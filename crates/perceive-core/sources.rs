@@ -33,20 +33,22 @@ pub enum ItemCompareStrategy {
     MTimeAndContent,
     MTime,
     Content,
+    /// Always consider the item changed
+    Always,
 }
 
 impl ItemCompareStrategy {
     pub fn should_compare_mtime(&self) -> bool {
         match self {
             ItemCompareStrategy::MTimeAndContent | ItemCompareStrategy::MTime => true,
-            ItemCompareStrategy::Content => false,
+            ItemCompareStrategy::Content | ItemCompareStrategy::Always => false,
         }
     }
 
     pub fn should_compare_content(&self) -> bool {
         match self {
             ItemCompareStrategy::MTimeAndContent | ItemCompareStrategy::Content => true,
-            ItemCompareStrategy::MTime => false,
+            ItemCompareStrategy::MTime | ItemCompareStrategy::Always => false,
         }
     }
 }

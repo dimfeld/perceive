@@ -97,8 +97,10 @@ pub fn scan_source(
     model_id: u32,
     model_version: u32,
     source: &Source,
+    override_compare_strategy: Option<ItemCompareStrategy>,
 ) -> Model {
     let scanner = source.create_scanner();
+    let compare_strategy = override_compare_strategy.unwrap_or(source.compare_strategy);
 
     #[allow(clippy::let_and_return)] // Much easier to read this way
     let returned_model = std::thread::scope(|scope| {
@@ -124,7 +126,7 @@ pub fn scan_source(
                 model_id,
                 model_version,
                 source.id,
-                source.compare_strategy,
+                compare_strategy,
                 item_rx,
                 matched_tx,
             )
@@ -137,7 +139,7 @@ pub fn scan_source(
         let read_task = scope.spawn(|| {
             read_items(
                 &times.read_time,
-                source.compare_strategy,
+                compare_strategy,
                 scanner.as_ref(),
                 matched_rx,
                 with_content_tx,
@@ -251,18 +253,21 @@ fn match_to_existing_items(
                         .map(|(a, b)| a == b)
                         .filter(|_| compare_mtime);
 
-                    match (found.has_embedding, same_time, mtime_is_sufficient) {
-                        // If there's no embedding, then always call it changed since we need to
-                        // recalculate it.
-                        (false, _, _) => ScanItemState::Changed(found),
+                    match (
+                        compare_strategy == ItemCompareStrategy::Always || !found.has_embedding,
+                        same_time,
+                        mtime_is_sufficient,
+                    ) {
+                        // If there's no embedding or we're set to always recalculate, then always call it changed.
+                        (true, _, _) => ScanItemState::Changed(found),
                         // mtime is different so no need to compare the content.
-                        (true, Some(false), _) => ScanItemState::Changed(found),
+                        (false, Some(false), _) => ScanItemState::Changed(found),
                         // mtime is the same and we're not comparing the content
-                        (true, Some(true), true) => ScanItemState::Unchanged { id: found.id },
+                        (false, Some(true), true) => ScanItemState::Unchanged { id: found.id },
                         // The mtime is the same but we stil have to compare the content.
-                        (true, Some(true), false) => ScanItemState::Found(found),
+                        (false, Some(true), false) => ScanItemState::Found(found),
                         // Inconclusive due to lack of mtime info, or we are configured to not compare it.
-                        (true, None, _) => ScanItemState::Found(found),
+                        (false, None, _) => ScanItemState::Found(found),
                     }
                 })
                 .unwrap_or(ScanItemState::New);
