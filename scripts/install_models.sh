@@ -1,9 +1,10 @@
 #!/bin/bash
+set -exuo pipefail
 
 mkdir -p model_data
 
 
-MODELS="sentence-transformers/msmarco-distilbert-base-tas-b sentence-transformers/msmarco-distilbert-base-v4"
+MODELS="sentence-transformers/msmarco-distilbert-base-tas-b sentence-transformers/msmarco-distilbert-dot-v5 sentence-transformers/msmarco-bert-base-dot-v5"
 
 git lfs install --skip-repo
 

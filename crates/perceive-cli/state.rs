@@ -19,7 +19,7 @@ impl AppState {
     pub fn new(db_path: Option<PathBuf>) -> Result<Self, eyre::Report> {
         let db = Database::new(db_path)?;
 
-        let model_type = SentenceEmbeddingsModelType::MsMarcoDistilbertBaseTasB;
+        let model_type = SentenceEmbeddingsModelType::MsMarcoBertBaseDotV5;
         let model_id = model_type.model_id();
         let model_version = 0;
 

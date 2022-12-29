@@ -45,8 +45,9 @@ pub enum SentenceEmbeddingsModelType {
     DistiluseBaseMultilingualCased,
     AllDistilrobertaV1,
     ParaphraseAlbertSmallV2,
-    MsMarcoDistilbertBaseV4,
+    MsMarcoDistilbertDotV5,
     MsMarcoDistilbertBaseTasB,
+    MsMarcoBertBaseDotV5,
 }
 
 impl SentenceEmbeddingsModelType {
@@ -69,9 +70,10 @@ impl SentenceEmbeddingsModelType {
             SentenceEmbeddingsModelType::ParaphraseAlbertSmallV2 => SentenceEmbeddingsConfig::from(
                 RBSentenceEmbeddingsModelType::ParaphraseAlbertSmallV2,
             ),
-            SentenceEmbeddingsModelType::MsMarcoDistilbertBaseV4 => {
-                msmarco_distilbert_base_v4_config()
+            SentenceEmbeddingsModelType::MsMarcoDistilbertDotV5 => {
+                msmarco_distilbert_dot_v5_config()
             }
+            SentenceEmbeddingsModelType::MsMarcoBertBaseDotV5 => msmarco_bert_base_dot_v5_config(),
             SentenceEmbeddingsModelType::MsMarcoDistilbertBaseTasB => {
                 msmarco_distilbert_base_tas_b_config()
             }
@@ -86,8 +88,9 @@ impl SentenceEmbeddingsModelType {
             SentenceEmbeddingsModelType::DistiluseBaseMultilingualCased => 2,
             SentenceEmbeddingsModelType::AllDistilrobertaV1 => 3,
             SentenceEmbeddingsModelType::ParaphraseAlbertSmallV2 => 4,
-            SentenceEmbeddingsModelType::MsMarcoDistilbertBaseV4 => 5,
+            SentenceEmbeddingsModelType::MsMarcoDistilbertDotV5 => 5,
             SentenceEmbeddingsModelType::MsMarcoDistilbertBaseTasB => 6,
+            SentenceEmbeddingsModelType::MsMarcoBertBaseDotV5 => 7,
         }
     }
 }
@@ -103,12 +106,17 @@ fn local_resource(model: &str, file: &str) -> Box<dyn ResourceProvider + Send> {
     ))))
 }
 
-fn model_config(model_name: &str, has_dense: bool, has_merges: bool) -> SentenceEmbeddingsConfig {
+fn model_config(
+    model_name: &str,
+    transformer_type: ModelType,
+    has_dense: bool,
+    has_merges: bool,
+) -> SentenceEmbeddingsConfig {
     let lr = |file: &str| local_resource(model_name, file);
 
     SentenceEmbeddingsConfig {
         modules_config_resource: lr("modules.json"),
-        transformer_type: ModelType::DistilBert,
+        transformer_type,
         transformer_config_resource: lr("config.json"),
         transformer_weights_resource: lr("rust_model.ot"),
         pooling_config_resource: lr("1_Pooling/config.json"),
@@ -122,12 +130,26 @@ fn model_config(model_name: &str, has_dense: bool, has_merges: bool) -> Sentence
     }
 }
 
-fn msmarco_distilbert_base_v4_config() -> SentenceEmbeddingsConfig {
-    model_config("msmarco-distilbert-base-v4", false, false)
+fn msmarco_bert_base_dot_v5_config() -> SentenceEmbeddingsConfig {
+    model_config("msmarco-bert-base-dot-v5", ModelType::Bert, false, false)
+}
+
+fn msmarco_distilbert_dot_v5_config() -> SentenceEmbeddingsConfig {
+    model_config(
+        "msmarco-distilbert-dot-v5",
+        ModelType::DistilBert,
+        false,
+        false,
+    )
 }
 
 fn msmarco_distilbert_base_tas_b_config() -> SentenceEmbeddingsConfig {
-    model_config("msmarco-distilbert-base-tas-b", false, false)
+    model_config(
+        "msmarco-distilbert-base-tas-b",
+        ModelType::DistilBert,
+        false,
+        false,
+    )
 }
 
 pub struct Model {
