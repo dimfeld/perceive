@@ -72,9 +72,22 @@ impl SentenceEmbeddingsModelType {
             SentenceEmbeddingsModelType::MsMarcoDistilbertBaseV4 => {
                 msmarco_distilbert_base_v4_config()
             }
-            SentenceEmbeddingsModelType::MsMarcoDistilbertBaseV4 => {
+            SentenceEmbeddingsModelType::MsMarcoDistilbertBaseTasB => {
                 msmarco_distilbert_base_tas_b_config()
             }
+        }
+    }
+
+    /// Map the model to the ID in the database
+    pub fn model_id(&self) -> u32 {
+        match self {
+            SentenceEmbeddingsModelType::AllMiniLmL6V2 => 0,
+            SentenceEmbeddingsModelType::AllMiniLmL12V2 => 1,
+            SentenceEmbeddingsModelType::DistiluseBaseMultilingualCased => 2,
+            SentenceEmbeddingsModelType::AllDistilrobertaV1 => 3,
+            SentenceEmbeddingsModelType::ParaphraseAlbertSmallV2 => 4,
+            SentenceEmbeddingsModelType::MsMarcoDistilbertBaseV4 => 5,
+            SentenceEmbeddingsModelType::MsMarcoDistilbertBaseTasB => 6,
         }
     }
 }

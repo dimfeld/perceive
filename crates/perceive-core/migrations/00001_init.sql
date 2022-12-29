@@ -76,7 +76,8 @@ INSERT INTO models (id, name, model_type, created_at) VALUES
   (2, 'DistiluseBaseMultilingualCased', 'DistiluseBaseMultilingualCased', 0),
   (3, 'AllDistilrobertaV1', 'AllDistilrobertaV1', 0),
   (4, 'ParaphraseAlbertSmallV2', 'ParaphraseAlbertSmallV2', 0),
-  (5, 'MsMarcoDistilbertBaseV4', 'MsMarcoDistilbertBaseV4', 0);
+  (5, 'MsMarcoDistilbertBaseV4', 'MsMarcoDistilbertBaseV4', 0),
+  (6, 'MsMarcoDistilbertBaseTasB', 'MsMarcoDistilbertBaseTasB', 0);
 
 INSERT INTO model_versions (model_id, version, status, weights_filename, created_at) VALUES
   (0, 0, 'ready', '', 0),
@@ -84,4 +85,5 @@ INSERT INTO model_versions (model_id, version, status, weights_filename, created
   (2, 0, 'ready', '', 0),
   (3, 0, 'ready', '', 0),
   (4, 0, 'ready', '', 0),
-  (5, 0, 'ready', '', 0);
+  (5, 0, 'ready', '', 0),
+  (6, 0, 'ready', '', 0);

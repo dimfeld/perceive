@@ -43,12 +43,18 @@ pub struct FoundItem {
     hash: String,
     content: String,
     modified: Option<i64>,
+    has_embedding: bool,
 }
 
 enum ScanItemState {
+    /// We're seeing this item for the first time.
     New,
+    /// This item has not changed since the last index.
     Unchanged { id: i64 },
+    /// The item exists, and we haven't determined yet if it changed or not.
     Found(FoundItem),
+    /// The item exists, and it has changed since last time.
+    /// Effectively this means that it will be reencoded.
     Changed(FoundItem),
 }
 
@@ -113,6 +119,8 @@ pub fn scan_source(
             match_to_existing_items(
                 times,
                 database,
+                model_id,
+                model_version,
                 source.id,
                 source.compare_strategy,
                 item_rx,
@@ -175,6 +183,8 @@ pub fn scan_source(
 fn match_to_existing_items(
     stats: &ScanStats,
     db: &Database,
+    model_id: u32,
+    model_version: u32,
     source_id: i64,
     compare_strategy: ItemCompareStrategy,
     rx: flume::Receiver<Vec<Item>>,
@@ -184,8 +194,9 @@ fn match_to_existing_items(
 
     let mut stmt = conn.prepare_cached(
         r##"
-        SELECT external_id, id, hash, modified, content
+        SELECT external_id, id, hash, modified, content, ie.item_id IS NOT NULL AS has_embedding
         FROM items
+        LEFT JOIN item_embeddings ie ON ie.item_id = items.id AND model_id = ? AND model_version = ?
         WHERE source_id = ? AND external_id IN rarray(?)
     "##,
     )?;
@@ -204,21 +215,25 @@ fn match_to_existing_items(
             .collect::<Vec<_>>();
 
         let mut found = stmt
-            .query_map(params![source_id, Rc::new(ids)], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    FoundItem {
-                        id: row.get::<_, i64>(1)?,
-                        hash: row.get::<_, String>(2)?,
-                        modified: row.get::<_, Option<i64>>(3)?,
-                        content: if compare_strategy.should_compare_content() {
-                            row.get::<_, String>(4)?
-                        } else {
-                            String::new()
+            .query_map(
+                params![model_id, model_version, source_id, Rc::new(ids)],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        FoundItem {
+                            id: row.get::<_, i64>(1)?,
+                            hash: row.get::<_, String>(2)?,
+                            modified: row.get::<_, Option<i64>>(3)?,
+                            content: if compare_strategy.should_compare_content() {
+                                row.get::<_, String>(4)?
+                            } else {
+                                String::new()
+                            },
+                            has_embedding: row.get(5)?,
                         },
-                    },
-                ))
-            })?
+                    ))
+                },
+            )?
             .into_iter()
             .collect::<Result<HashMap<_, _>, _>>()?;
 
@@ -234,15 +249,18 @@ fn match_to_existing_items(
                         .map(|(a, b)| a == b)
                         .filter(|_| compare_mtime);
 
-                    match (same_time, mtime_is_sufficient) {
+                    match (found.has_embedding, same_time, mtime_is_sufficient) {
+                        // If there's no embedding, then always call it changed since we need to
+                        // recalculate it.
+                        (false, _, _) => ScanItemState::Changed(found),
                         // mtime is different so no need to compare the content.
-                        (Some(false), _) => ScanItemState::Changed(found),
+                        (true, Some(false), _) => ScanItemState::Changed(found),
                         // mtime is the same and we're not comparing the content
-                        (Some(true), true) => ScanItemState::Unchanged { id: found.id },
+                        (true, Some(true), true) => ScanItemState::Unchanged { id: found.id },
                         // The mtime is the same but we stil have to compare the content.
-                        (Some(true), false) => ScanItemState::Found(found),
+                        (true, Some(true), false) => ScanItemState::Found(found),
                         // Inconclusive due to lack of mtime info, or we are configured to not compare it.
-                        (None, _) => ScanItemState::Found(found),
+                        (true, None, _) => ScanItemState::Found(found),
                     }
                 })
                 .unwrap_or(ScanItemState::New);
@@ -411,17 +429,13 @@ fn update_db(
                 "##,
             )?;
 
-            let mut embedding_update_stmt = tx.prepare_cached(
-            r##"UPDATE item_embeddings
-                    SET embedding = :embedding,
-                    item_index_version = :version
-                    WHERE item_id = :id AND model_id = :model_id AND model_version = :model_version"##,
-        )?;
-
-            let mut embedding_insert_stmt = tx.prepare_cached(
+            let mut embedding_stmt = tx.prepare_cached(
                 r##" INSERT INTO item_embeddings
                     (item_id, item_index_version, embedding, model_id, model_version)
-                    VALUES (:id, :version, :embedding, :model_id, :model_version) "##,
+                    VALUES (:id, :version, :embedding, :model_id, :model_version)
+                    ON CONFLICT (item_id, model_id, model_version) DO UPDATE
+                        SET item_index_version=EXCLUDED.item_index_version,
+                            embedding=EXCLUDED.embedding"##,
             )?;
 
             for (item, embedding) in &batch {
@@ -444,7 +458,7 @@ fn update_db(
                         })?;
 
                         let bytes_vec = serialize_embedding(embedding);
-                        embedding_update_stmt.execute(named_params! {
+                        embedding_stmt.execute(named_params! {
                             ":embedding": &bytes_vec,
                             ":version": index_version,
                             ":id": found.id,
@@ -476,7 +490,7 @@ fn update_db(
                             bytes_vec.extend(value.to_le_bytes());
                         }
 
-                        embedding_insert_stmt.execute(named_params! {
+                        embedding_stmt.execute(named_params! {
                             ":embedding": &bytes_vec,
                             ":version": index_version,
                             ":id": row_id,

@@ -1,9 +1,10 @@
 use clap::Subcommand;
 use eyre::{eyre, Result};
 
-use self::search::SearchArgs;
+use self::{model::ModelArgs, search::SearchArgs};
 use crate::AppState;
 
+pub mod model;
 pub mod search;
 pub mod source;
 
@@ -15,6 +16,8 @@ pub enum Commands {
     Refresh,
     /// Do a search
     Search(SearchArgs),
+    /// Configure the mODel
+    Model(ModelArgs),
 }
 
 pub fn handle_command(state: &mut AppState, cmd: Commands) -> Result<()> {
@@ -22,5 +25,6 @@ pub fn handle_command(state: &mut AppState, cmd: Commands) -> Result<()> {
         Commands::Refresh => return Err(eyre!("Not implemented yet")),
         Commands::Search(args) => search::search(state, args),
         Commands::Source(args) => source::handle_source_command(state, args),
+        Commands::Model(args) => model::handle_model_command(state, args),
     }
 }

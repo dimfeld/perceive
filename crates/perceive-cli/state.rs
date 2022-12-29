@@ -19,7 +19,8 @@ impl AppState {
     pub fn new(db_path: Option<PathBuf>) -> Result<Self, eyre::Report> {
         let db = Database::new(db_path)?;
 
-        let model_id = 5;
+        let model_type = SentenceEmbeddingsModelType::MsMarcoDistilbertBaseTasB;
+        let model_id = model_type.model_id();
         let model_version = 0;
 
         let sources = perceive_core::sources::db::list_sources(&db)?;
@@ -27,9 +28,7 @@ impl AppState {
         let searcher = perceive_core::search::Searcher::build(&db, model_id, model_version)?;
 
         Ok(AppState {
-            model: Some(Model::new_pretrained(
-                SentenceEmbeddingsModelType::MsMarcoDistilbertBaseV4,
-            )?),
+            model: Some(Model::new_pretrained(model_type)?),
             model_id,
             model_version,
             database: db,
