@@ -35,6 +35,8 @@ pub struct Item {
     pub external_id: String,
     pub hash: Option<String>,
     pub content: Option<String>,
+    pub raw_content: Option<Vec<u8>>,
+    pub process_version: i32,
     pub metadata: ItemMetadata,
     pub skipped: Option<SkipReason>,
 }

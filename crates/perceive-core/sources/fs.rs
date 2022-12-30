@@ -43,8 +43,8 @@ impl SourceScanner for FileScanner {
     fn read(
         &self,
         _existing: Option<&FoundItem>,
-        mut item: Item,
-    ) -> Result<(SourceScannerReadResult, Item), eyre::Report> {
+        item: &mut Item,
+    ) -> Result<SourceScannerReadResult, eyre::Report> {
         let Ok(content) = std::fs::read_to_string(std::path::Path::new(&item.external_id)) else {
             // Currently we just return None if reading fails. This includes where the file
             // is a binary file that can't be converted to UTF-8. In the future we should
@@ -52,11 +52,11 @@ impl SourceScanner for FileScanner {
             //
             // Future iterations of this will also try to process other file formats that aren't plain
             // text but do contain text (i.e. Word, Pages, etc.).
-            return Ok((SourceScannerReadResult::Omit, item));
+            return Ok(SourceScannerReadResult::Omit);
         };
 
         if content.trim().is_empty() {
-            return Ok((SourceScannerReadResult::Omit, item));
+            return Ok(SourceScannerReadResult::Omit);
         }
 
         let parser = gray_matter::Matter::<gray_matter::engine::YAML>::new();
@@ -69,7 +69,7 @@ impl SourceScanner for FileScanner {
             item.content = Some(content);
         }
 
-        Ok((SourceScannerReadResult::Found, item))
+        Ok(SourceScannerReadResult::Found)
     }
 }
 
@@ -114,7 +114,9 @@ impl ignore::ParallelVisitor for FileVisitor {
                     external_id: entry.path().to_string_lossy().to_string(),
                     hash: None,
                     content: None,
+                    raw_content: None,
                     skipped: None,
+                    process_version: 0,
                     metadata: crate::ItemMetadata {
                         name: None,
                         author: None,

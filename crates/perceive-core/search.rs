@@ -96,8 +96,10 @@ impl Searcher {
                         source_id: row.get(1)?,
                         external_id: row.get(2)?,
                         content: row.get(3)?,
+                        raw_content: None,
                         hash: None,
                         skipped: None,
+                        process_version: 0,
                         metadata: ItemMetadata {
                             name: row.get(4)?,
                             author: row.get(5)?,

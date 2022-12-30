@@ -1,5 +1,4 @@
 use std::{
-    borrow::Cow,
     fmt::Display,
     rc::Rc,
     sync::atomic::{AtomicU64, Ordering},
@@ -7,13 +6,13 @@ use std::{
 
 use ahash::HashMap;
 use itertools::Itertools;
-use rayon::prelude::*;
 use rusqlite::{named_params, params, types::Value};
+use smallvec::{smallvec, SmallVec};
 
 use super::{ItemCompareStrategy, Source};
 use crate::{
-    batch_sender::BatchSender, db::Database, model::Model, search::serialize_embedding,
-    time_tracker::TimeTracker, Item, SkipReason,
+    db::Database, model::Model, search::serialize_embedding, time_tracker::TimeTracker, Item,
+    SkipReason,
 };
 
 /// Data returned when the source scanner tries to read an item.
@@ -38,8 +37,14 @@ pub(super) trait SourceScanner: Send + Sync {
     fn read(
         &self,
         existing: Option<&FoundItem>,
-        item: Item,
-    ) -> Result<(SourceScannerReadResult, Item), eyre::Report>;
+        item: &mut Item,
+    ) -> Result<SourceScannerReadResult, eyre::Report>;
+
+    /// For pipelines that do some postprocessing on the data, reprocess that data.
+    #[allow(unused_variables)]
+    fn reprocess(&self, item: &mut Item) -> Result<SourceScannerReadResult, eyre::Report> {
+        Ok(SourceScannerReadResult::Unchanged)
+    }
 }
 
 pub(super) struct FoundItem {
@@ -98,6 +103,8 @@ pub struct ScanStats {
     pub write_time: TimeTracker,
 }
 
+const EMBEDDING_BATCH_SIZE: usize = 64;
+
 pub fn scan_source(
     times: &ScanStats,
     database: &Database,
@@ -116,9 +123,9 @@ pub fn scan_source(
     #[allow(clippy::let_and_return)] // Much easier to read this way
     let returned_model = std::thread::scope(|scope| {
         let (item_tx, item_rx) = flume::unbounded();
-        let (matched_tx, matched_rx) = flume::unbounded();
-        let (with_content_tx, with_content_rx) = flume::unbounded();
-        let (with_embeddings_tx, with_embeddings_rx) = flume::unbounded();
+        let (matched_tx, matched_rx) = flume::bounded(256);
+        let (with_content_tx, with_content_rx) = flume::bounded(EMBEDDING_BATCH_SIZE);
+        let (with_embeddings_tx, with_embeddings_rx) = flume::bounded(8);
 
         // Make a pipeline with the following stages:
         // - Scan the file system and send out batches of items
@@ -147,20 +154,31 @@ pub fn scan_source(
         // - Read the content of the file
         // - Match against the content, if applicable
         // - If the content did not change, skip the item.
-        let read_task = scope.spawn(|| {
-            read_items(
-                times,
-                compare_strategy,
-                scanner.as_ref(),
-                matched_rx,
-                with_content_tx,
-            )
-        });
+        const READ_PARALLELISM: usize = 8;
+        let read_tasks = itertools::repeat_n((matched_rx, with_content_tx), READ_PARALLELISM)
+            .into_iter()
+            .map(|(matched_rx, with_content_tx)| {
+                scope.spawn(|| {
+                    read_items(
+                        times,
+                        compare_strategy,
+                        scanner.as_ref(),
+                        matched_rx,
+                        with_content_tx,
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
 
         // STAGE 4
         // - Calculate embeddings for the items in this batch that we are keeping.
-        let embed_task =
-            scope.spawn(|| calculate_embeddings(times, model, with_content_rx, with_embeddings_tx));
+        let embed_task = scope.spawn(move || {
+            let result = calculate_embeddings(times, &model, with_content_rx, with_embeddings_tx);
+            match result {
+                Ok(()) => Ok(model),
+                Err(e) => Err((model, e)),
+            }
+        });
 
         // STAGE 5
         // - Update the database for items that will be kept
@@ -206,7 +224,10 @@ pub fn scan_source(
                 model
             }
         };
-        errored = errored || log_thread_error("read_items", read_task.join());
+
+        for read_task in read_tasks {
+            errored = errored || log_thread_error("read_items", read_task.join());
+        }
         errored = errored || log_thread_error("db_lookup", db_lookup_task.join());
         errored = errored || log_thread_error("scanner", scan_task.join());
 
@@ -218,8 +239,9 @@ pub fn scan_source(
     });
 
     // AFTER PIPELINE TODO
-    // - Delete any items for which the index_version did not get updated to
-    //   the latest vesion.
+    // - For source types that require it, delete any items for which the
+    //   index_version did not get updated to the latest vesion. This means
+    //   that they were not found in the scan.
 
     Ok(returned_model)
 }
@@ -232,7 +254,7 @@ fn match_to_existing_items(
     source_id: i64,
     compare_strategy: ItemCompareStrategy,
     rx: flume::Receiver<Vec<Item>>,
-    tx: flume::Sender<Vec<ScanItem>>,
+    tx: flume::Sender<ScanItem>,
 ) -> Result<(), eyre::Report> {
     let conn = db.read_pool.get()?;
 
@@ -248,7 +270,6 @@ fn match_to_existing_items(
     let compare_mtime = compare_strategy.should_compare_mtime();
     let mtime_is_sufficient = compare_strategy == ItemCompareStrategy::MTime;
 
-    let sender = BatchSender::new(32, tx);
     for batch in rx {
         stats
             .scanned
@@ -318,7 +339,7 @@ fn match_to_existing_items(
                 })
                 .unwrap_or(ScanItemState::New);
 
-            sender.add(ScanItem { state, item })?;
+            tx.send(ScanItem { state, item })?;
         }
     }
 
@@ -329,107 +350,134 @@ fn read_items(
     stats: &ScanStats,
     compare_strategy: ItemCompareStrategy,
     scanner: &dyn SourceScanner,
-    rx: flume::Receiver<Vec<ScanItem>>,
-    tx: flume::Sender<Vec<ScanItem>>,
+    rx: flume::Receiver<ScanItem>,
+    tx: flume::Sender<ScanItem>,
 ) -> Result<(), eyre::Report> {
-    let sender = BatchSender::new(64, tx);
-    for batch in rx {
+    for item in rx {
         let _track = stats.read_time.begin();
 
-        batch
-            .into_par_iter()
-            .try_for_each_with(sender.clone(), |sender, item| {
-                let ScanItem { item, state } = item;
+        let ScanItem { mut item, state } = item;
 
-                let existing = match &state {
-                    ScanItemState::New => None,
-                    ScanItemState::Found(found) => Some(found),
-                    ScanItemState::Changed(found) => Some(found),
-                    ScanItemState::Unchanged { .. } => {
-                        sender.add(ScanItem { item, state })?;
-                        return Ok(());
-                    }
-                };
+        let existing = match &state {
+            ScanItemState::New => None,
+            ScanItemState::Found(found) => Some(found),
+            ScanItemState::Changed(found) => Some(found),
+            ScanItemState::Unchanged { .. } => {
+                tx.send(ScanItem { item, state })?;
+                continue;
+            }
+        };
 
-                let external_id = item.external_id.clone();
+        let external_id = item.external_id.clone();
 
-                stats.reading.fetch_add(1, Ordering::Relaxed);
-                let read_result = scanner.read(existing, item);
-                stats.reading.fetch_sub(1, Ordering::Relaxed);
-                stats.fetched.fetch_add(1, Ordering::Relaxed);
+        stats.reading.fetch_add(1, Ordering::Relaxed);
+        let read_result = scanner.read(existing, &mut item);
+        stats.reading.fetch_sub(1, Ordering::Relaxed);
+        stats.fetched.fetch_add(1, Ordering::Relaxed);
 
-                let (item, state) = match read_result {
-                    Ok((SourceScannerReadResult::Found, item)) => (item, state),
-                    Ok((SourceScannerReadResult::Unchanged, item)) => {
-                        if let Some(id) = state.item_id() {
-                            (item, ScanItemState::Unchanged { id })
-                        } else {
-                            // The scanner said the item was unchanged, but we also don't have an
-                            // existing one. Just skip it.
-                            return Ok(());
-                        }
-                    }
-                    Ok((SourceScannerReadResult::Omit, _)) => {
-                        return Ok(());
-                    }
-                    Err(e) => {
-                        // TODO - better error handling
-                        eprintln!("{}: {e}", external_id);
-                        return Ok(());
-                    }
-                };
+        let state = match read_result {
+            Ok(SourceScannerReadResult::Found) => state,
+            Ok(SourceScannerReadResult::Unchanged) => {
+                if let Some(id) = state.item_id() {
+                    ScanItemState::Unchanged { id }
+                } else {
+                    // The scanner said the item was unchanged, but we also don't have an
+                    // existing one. Just skip it.
+                    continue;
+                }
+            }
+            Ok(SourceScannerReadResult::Omit) => {
+                continue;
+            }
+            Err(e) => {
+                // TODO - better error handling
+                eprintln!("{}: {e}", external_id);
+                continue;
+            }
+        };
 
-                let compare_content =
-                    item.skipped.is_none() && compare_strategy.should_compare_content();
-                let state = match state {
-                    ScanItemState::New
-                    | ScanItemState::Unchanged { .. }
-                    | ScanItemState::Changed(_) => state,
-                    ScanItemState::Found(found) => {
-                        if compare_content
-                            && found.content != item.content.as_deref().unwrap_or_default()
-                        {
-                            ScanItemState::Changed(found)
-                        } else {
-                            ScanItemState::Unchanged { id: found.id }
-                        }
-                    }
-                };
+        let compare_content = item.skipped.is_none() && compare_strategy.should_compare_content();
+        let state = match state {
+            ScanItemState::New | ScanItemState::Unchanged { .. } | ScanItemState::Changed(_) => {
+                state
+            }
+            ScanItemState::Found(found) => {
+                if compare_content && found.content != item.content.as_deref().unwrap_or_default() {
+                    ScanItemState::Changed(found)
+                } else {
+                    ScanItemState::Unchanged { id: found.id }
+                }
+            }
+        };
 
-                sender.add(ScanItem { state, item })?;
-                Ok::<_, eyre::Report>(())
-            })?;
+        tx.send(ScanItem { state, item })?;
     }
 
     Ok(())
 }
 
+type EmbeddingsOutput = SmallVec<[(ScanItem, Option<Vec<f32>>); 1]>;
+
+fn calculate_embeddings_batch(
+    stats: &ScanStats,
+    model: &Model,
+    batch: &mut Vec<ScanItem>,
+    documents: &Vec<String>,
+) -> Result<EmbeddingsOutput, eyre::Report> {
+    let _track = stats.encode_time.begin();
+
+    stats
+        .embedding
+        .fetch_add(documents.len() as u64, Ordering::Relaxed);
+
+    // TODO Don't unwrap. What is the proper way to handle an error here? Probably just quit
+    // the index job since it indicates some larger problem, but we also might need
+    // to reset the model or something (though it seems that Torch just panics
+    // in those cases).
+    let embeddings: Vec<Vec<f32>> = model.encode(documents).unwrap().into();
+
+    stats
+        .embedding
+        .fetch_sub(documents.len() as u64, Ordering::Relaxed);
+
+    stats
+        .encoded
+        .fetch_add(embeddings.len() as u64, Ordering::Relaxed);
+
+    let output = batch
+        .drain(..)
+        .zip(embeddings.into_iter().map(Some))
+        .collect::<SmallVec<_>>();
+
+    Ok(output)
+}
+
 fn calculate_embeddings(
     stats: &ScanStats,
-    model: Model,
-    rx: flume::Receiver<Vec<ScanItem>>,
-    tx: flume::Sender<Vec<(ScanItem, Option<Vec<f32>>)>>,
-) -> Result<Model, (Model, eyre::Report)> {
-    let sender = BatchSender::new(16, tx);
-    for batch in rx {
-        let _track = stats.encode_time.begin();
+    model: &Model,
+    rx: flume::Receiver<ScanItem>,
+    tx: flume::Sender<EmbeddingsOutput>,
+) -> Result<(), eyre::Report> {
+    let mut batch = Vec::with_capacity(EMBEDDING_BATCH_SIZE);
+    let mut documents = Vec::with_capacity(EMBEDDING_BATCH_SIZE);
 
-        let (embedding_source, contents): (Vec<usize>, Vec<Cow<str>>) = batch
-            .iter()
-            .enumerate()
-            .filter(|(_, item)| {
-                matches!(item.state, ScanItemState::New | ScanItemState::Changed(_))
-                    && item.item.skipped.is_none()
-            })
-            .filter_map(|(index, item)| {
-                if item.item.metadata.name.is_none() && item.item.metadata.description.is_none() {
-                    return item
-                        .item
-                        .content
-                        .as_deref()
-                        .map(|s| (index, Cow::Borrowed(s.trim())));
-                }
+    for item in rx {
+        if matches!(
+            item.state,
+            ScanItemState::Unchanged { .. } | ScanItemState::Found(_)
+        ) || item.item.skipped.is_some()
+        {
+            tx.send(smallvec![(item, None)])?;
+            continue;
+        }
 
+        // We could `std::mem::replace` the batch vector with a new one, but instead
+        // we `drain` at the end of the operations.
+
+        let document =
+            if item.item.metadata.name.is_none() && item.item.metadata.description.is_none() {
+                item.item.content.as_deref().map(|s| s.trim().to_string())
+            } else {
                 let document = [
                     item.item.metadata.name.as_deref(),
                     item.item.metadata.description.as_deref(),
@@ -443,54 +491,33 @@ fn calculate_embeddings(
                 if document.is_empty() {
                     None
                 } else {
-                    Some((index, Cow::Owned(document)))
+                    Some(document)
                 }
-            })
-            .multiunzip();
-
-        stats
-            .embedding
-            .fetch_add(contents.len() as u64, Ordering::Relaxed);
-
-        // TODO Don't unwrap. What is the proper way to handle an error here? Probably just quit
-        // the index since it indicates some larger problem.
-        let mut embeddings: Vec<Vec<f32>> = if contents.is_empty() {
-            // The model doesn't like it if you feed it nothing, so just skip it.
-            Vec::new()
-        } else {
-            model.encode(&contents).unwrap().into()
-        };
-
-        stats
-            .embedding
-            .fetch_sub(contents.len() as u64, Ordering::Relaxed);
-
-        stats
-            .encoded
-            .fetch_add(embeddings.len() as u64, Ordering::Relaxed);
-
-        let mut embedding_index = 0;
-        for (index, item) in batch.into_iter().enumerate() {
-            let embedding = if embedding_source
-                .get(embedding_index)
-                .copied()
-                .unwrap_or(usize::MAX)
-                == index
-            {
-                let embedding = std::mem::take(&mut embeddings[embedding_index]);
-                embedding_index += 1;
-                Some(embedding)
-            } else {
-                None
             };
 
-            if let Err(e) = sender.add((item, embedding)) {
-                return Err((model, e.into()));
-            }
+        let Some(document) = document else {
+            tx.send(smallvec![(item, None)])?;
+            continue;
+        };
+
+        documents.push(document);
+        batch.push(item);
+        if batch.len() < EMBEDDING_BATCH_SIZE {
+            continue;
         }
+
+        let output = calculate_embeddings_batch(stats, model, &mut batch, &documents)?;
+        documents.clear();
+
+        tx.send(output)?;
     }
 
-    Ok(model)
+    if !batch.is_empty() {
+        let output = calculate_embeddings_batch(stats, model, &mut batch, &documents)?;
+        tx.send(output)?;
+    }
+
+    Ok(())
 }
 
 fn update_db(
@@ -499,7 +526,7 @@ fn update_db(
     stats: &ScanStats,
     database: &Database,
     index_version: i64,
-    rx: flume::Receiver<Vec<(ScanItem, Option<Vec<f32>>)>>,
+    rx: flume::Receiver<EmbeddingsOutput>,
 ) -> Result<(), eyre::Report> {
     for batch in rx {
         let _track = stats.write_time.begin();
@@ -520,8 +547,10 @@ fn update_db(
             let mut changed_stmt = tx.prepare_cached(
                 r##"
                 UPDATE items
-                SET version=:version, hash=:hash, content=:content, name=:name, author=:author,
-                    description=:description, modified=:modified, last_accessed=:last_accessed,
+                SET version=:version, hash=:hash, content=:content, raw_content=:raw_content,
+                    process_version=:process_version,
+                    name=:name, author=:author, description=:description,
+                    modified=:modified, last_accessed=:last_accessed,
                     skipped=:skipped
                 WHERE id=:id
                 "##,
@@ -529,10 +558,11 @@ fn update_db(
 
             let mut new_stmt = tx.prepare_cached(
                 r##"
-                INSERT INTO items (source_id, external_id, version, hash, content, name, author,
+                INSERT INTO items (source_id, external_id, version, hash, content,
+                    raw_content, process_version, name, author,
                     description, modified, last_accessed, skipped)
-                VALUES (:source_id, :external_id, :version, :hash, :content, :name, :author,
-                    :description, :modified, :last_accessed, :skipped);
+                VALUES (:source_id, :external_id, :version, :hash, :content, :raw_content, :process_version,
+                    :name, :author, :description, :modified, :last_accessed, :skipped);
                 "##,
             )?;
 
@@ -558,6 +588,8 @@ fn update_db(
                             ":version": index_version,
                             ":hash": item.item.hash.as_deref().unwrap_or_default(),
                             ":content": item.item.content.as_deref().unwrap_or_default(),
+                            ":raw_content": item.item.raw_content.as_ref(),
+                            ":process_version": item.item.process_version,
                             ":name": item.item.metadata.name.as_deref(),
                             ":author": item.item.metadata.author.as_deref(),
                             ":description": item.item.metadata.description.as_deref(),
@@ -576,6 +608,8 @@ fn update_db(
                             ":version": index_version,
                             ":hash": item.item.hash.as_deref().unwrap_or_default(),
                             ":content": item.item.content.as_deref().unwrap_or_default(),
+                            ":raw_content": item.item.raw_content.as_ref(),
+                            ":process_version": item.item.process_version,
                             ":name": item.item.metadata.name.as_deref(),
                             ":author": item.item.metadata.author.as_deref(),
                             ":description": item.item.metadata.description.as_deref(),

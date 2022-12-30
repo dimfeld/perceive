@@ -1,4 +1,4 @@
-use std::{path::Path, time::SystemTime};
+use std::{io::Cursor, path::Path, time::SystemTime};
 
 use ahash::HashSet;
 use eyre::{eyre, Context};
@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use time::{macros::datetime, OffsetDateTime};
 
 use super::import::{SourceScanner, SourceScannerReadResult};
-use crate::{batch_sender::BatchSender, SkipReason};
+use crate::{batch_sender::BatchSender, Item, SkipReason};
 
 const ALWAYS_SKIP: [&str; 5] = [
     // Signin pages. These show up a lot but never contain searchable content.
@@ -49,7 +49,17 @@ impl ChromiumHistoryScanner {
                 .build()?,
         })
     }
+
+    fn extract_html_article(
+        url: &Url,
+        raw_content: &[u8],
+    ) -> Result<readability::extractor::Product, eyre::Report> {
+        let mut cursor = Cursor::new(raw_content);
+        readability::extractor::extract(&mut cursor, url).map_err(|e| e.into())
+    }
 }
+
+const PROCESS_VERSION: i32 = 0;
 
 impl SourceScanner for ChromiumHistoryScanner {
     fn scan(&self, output: flume::Sender<Vec<crate::Item>>) -> Result<(), eyre::Report> {
@@ -95,6 +105,8 @@ impl SourceScanner for ChromiumHistoryScanner {
                     ..Default::default()
                 },
                 content: None,
+                raw_content: None,
+                process_version: PROCESS_VERSION,
             };
 
             Ok(item)
@@ -155,11 +167,12 @@ impl SourceScanner for ChromiumHistoryScanner {
     fn read(
         &self,
         existing: Option<&super::import::FoundItem>,
-        mut item: crate::Item,
-    ) -> Result<(SourceScannerReadResult, crate::Item), eyre::Report> {
-        // We skipped it last time, so continue skipping it.
-        if item.skipped.is_some() {
-            return Ok((SourceScannerReadResult::Unchanged, item));
+        item: &mut Item,
+    ) -> Result<SourceScannerReadResult, eyre::Report> {
+        if let Some(skipped) = existing.and_then(|e| e.skipped) {
+            // We skipped it last time, so continue skipping it.
+            item.skipped = Some(skipped);
+            return Ok(SourceScannerReadResult::Unchanged);
         }
 
         let existing_atime = existing.and_then(|e| e.last_accessed);
@@ -170,7 +183,7 @@ impl SourceScanner for ChromiumHistoryScanner {
             .map(|(n, e)| n > e)
             .unwrap_or(true);
         if !newer_access {
-            return Ok((SourceScannerReadResult::Unchanged, item));
+            return Ok(SourceScannerReadResult::Unchanged);
         }
 
         let mut req_headers = reqwest::header::HeaderMap::with_capacity(2);
@@ -191,12 +204,12 @@ impl SourceScanner for ChromiumHistoryScanner {
         }
 
         let response = self.client.get(&item.external_id).send();
-        let mut response = match response {
+        let response = match response {
+            Ok(r) => r,
             Err(_) => {
                 item.skipped = Some(SkipReason::FetchError);
-                return Ok((SourceScannerReadResult::Found, item));
+                return Ok(SourceScannerReadResult::Found);
             }
-            Ok(r) => r,
         };
 
         let status = response.status();
@@ -212,13 +225,13 @@ impl SourceScanner for ChromiumHistoryScanner {
 
         if skip_reason.is_some() {
             item.skipped = skip_reason;
-            return Ok((SourceScannerReadResult::Found, item));
+            return Ok(SourceScannerReadResult::Found);
         }
 
         let unchanged = matches!(response.status(), StatusCode::NOT_MODIFIED)
             || response.content_length().map(|l| l == 0).unwrap_or(false);
         if unchanged {
-            return Ok((SourceScannerReadResult::Unchanged, item));
+            return Ok(SourceScannerReadResult::Unchanged);
         }
 
         let headers = response.headers();
@@ -246,19 +259,46 @@ impl SourceScanner for ChromiumHistoryScanner {
             // useful for PDFs, and also helps us to store the etag, modified
             // date, etc. so that we aren't doing full fetches over and over again.
             item.content = Some(String::new());
-            return Ok((SourceScannerReadResult::Found, item));
+            return Ok(SourceScannerReadResult::Found);
         }
 
         if content_type.starts_with("text/html") {
+            let raw_content = response.text()?;
             let url = Url::parse(&item.external_id)?;
-            let doc = readability::extractor::extract(&mut response, &url)?;
 
+            let (doc, raw_compressed) = rayon::join(
+                || Self::extract_html_article(&url, raw_content.as_bytes()),
+                || zstd::encode_all(raw_content.as_bytes(), 3),
+            );
+
+            item.raw_content = Some(raw_compressed?);
+
+            let doc = doc?;
             item.metadata.name = Some(doc.title);
             item.content = Some(doc.text);
         } else {
             item.content = Some(response.text()?);
         }
 
-        Ok((SourceScannerReadResult::Found, item))
+        Ok(SourceScannerReadResult::Found)
+    }
+
+    fn reprocess(&self, item: &mut crate::Item) -> Result<SourceScannerReadResult, eyre::Report> {
+        if item.process_version == PROCESS_VERSION || item.raw_content.is_none() {
+            return Ok(SourceScannerReadResult::Unchanged);
+        }
+
+        let Some(raw_content) = item.raw_content.as_ref() else {
+            return Ok(SourceScannerReadResult::Unchanged);
+        };
+
+        let raw_content = zstd::decode_all(raw_content.as_slice())?;
+        let url = Url::parse(&item.external_id)?;
+        let doc = Self::extract_html_article(&url, &raw_content)?;
+
+        item.metadata.name = Some(doc.title);
+        item.content = Some(doc.text);
+
+        Ok(SourceScannerReadResult::Found)
     }
 }

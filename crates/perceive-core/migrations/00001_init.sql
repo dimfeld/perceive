@@ -48,6 +48,9 @@ CREATE TABLE items (
   version INTEGER NOT NULL DEFAULT 0,
   hash TEXT NOT NULL,
   content TEXT NOT NULL,
+  -- For content that has been processed after reading, the original content
+  raw_content BLOB,
+  process_version INTEGER NOT NULL DEFAULT 0,
   -- Metadata that we may or may not be able to glean from the file
   name TEXT,
   author TEXT,
