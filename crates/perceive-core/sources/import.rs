@@ -31,12 +31,13 @@ pub enum SourceScannerReadResult {
 
 pub(super) trait SourceScanner: Send + Sync {
     /// Scan the sources and output batches of found items
-    fn scan(&self, output: flume::Sender<Vec<Item>>) -> Result<(), eyre::Report>;
+    fn scan(&self, output: CountingVecSender<Item>) -> Result<(), eyre::Report>;
     /// Read the full content of a single item. If the function reads the file and determines that
     /// it should not be indexed, it should return SourceScannerReadResult and the original item.
     fn read(
         &self,
         existing: Option<&FoundItem>,
+        compare_strategy: ItemCompareStrategy,
         item: &mut Item,
     ) -> Result<SourceScannerReadResult, eyre::Report>;
 
@@ -103,6 +104,27 @@ pub struct ScanStats {
     pub write_time: TimeTracker,
 }
 
+pub struct CountingVecSender<'a, T> {
+    tx: flume::Sender<Vec<T>>,
+    count: &'a AtomicU64,
+}
+
+impl<'a, T> Clone for CountingVecSender<'a, T> {
+    fn clone(&self) -> Self {
+        Self {
+            tx: self.tx.clone(),
+            count: self.count,
+        }
+    }
+}
+
+impl<'a, T> CountingVecSender<'a, T> {
+    pub fn send(&self, batch: Vec<T>) -> Result<(), flume::SendError<Vec<T>>> {
+        self.count.fetch_add(batch.len() as u64, Ordering::Relaxed);
+        self.tx.send(batch)
+    }
+}
+
 const EMBEDDING_BATCH_SIZE: usize = 64;
 
 pub fn scan_source(
@@ -126,6 +148,11 @@ pub fn scan_source(
         let (matched_tx, matched_rx) = flume::bounded(256);
         let (with_content_tx, with_content_rx) = flume::bounded(EMBEDDING_BATCH_SIZE);
         let (with_embeddings_tx, with_embeddings_rx) = flume::bounded(8);
+
+        let item_tx = CountingVecSender {
+            tx: item_tx,
+            count: &times.scanned,
+        };
 
         // Make a pipeline with the following stages:
         // - Scan the file system and send out batches of items
@@ -206,10 +233,7 @@ pub fn scan_source(
                     eprintln!("Thread {name} failed: {}", e);
                     true
                 }
-                Ok(Ok(_)) => {
-                    eprintln!("Thread {name} finished successfully");
-                    false
-                }
+                Ok(Ok(_)) => false,
             }
         }
 
@@ -271,9 +295,6 @@ fn match_to_existing_items(
     let mtime_is_sufficient = compare_strategy == ItemCompareStrategy::MTime;
 
     for batch in rx {
-        stats
-            .scanned
-            .fetch_add(batch.len() as u64, Ordering::Relaxed);
         let ids = batch
             .iter()
             .map(|item| Value::from(item.external_id.clone()))
@@ -321,7 +342,7 @@ fn match_to_existing_items(
                         .filter(|_| compare_mtime);
 
                     match (
-                        compare_strategy == ItemCompareStrategy::Always || !found.has_embedding,
+                        compare_strategy == ItemCompareStrategy::Force || !found.has_embedding,
                         same_time,
                         mtime_is_sufficient,
                     ) {
@@ -371,7 +392,7 @@ fn read_items(
         let external_id = item.external_id.clone();
 
         stats.reading.fetch_add(1, Ordering::Relaxed);
-        let read_result = scanner.read(existing, &mut item);
+        let read_result = scanner.read(existing, compare_strategy, &mut item);
         stats.reading.fetch_sub(1, Ordering::Relaxed);
         stats.fetched.fetch_add(1, Ordering::Relaxed);
 
@@ -540,7 +561,7 @@ fn update_db(
         {
             let mut unchanged_stmt = tx.prepare_cached(
                 r##"
-                UPDATE items SET version = ? WHERE id = ?
+                UPDATE items SET version = ?, last_accessed = ? WHERE id = ?
                 "##,
             )?;
 
@@ -578,7 +599,11 @@ fn update_db(
             for (item, embedding) in &batch {
                 let item_id = match &item.state {
                     ScanItemState::Unchanged { id } => {
-                        unchanged_stmt.execute(params![index_version, id])?;
+                        unchanged_stmt.execute(params![
+                            index_version,
+                            item.item.metadata.atime.map(|t| t.unix_timestamp()),
+                            id
+                        ])?;
                         unchanged += 1;
                         *id
                     }

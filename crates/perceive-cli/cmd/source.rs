@@ -216,7 +216,7 @@ fn scan_source(state: &mut AppState, args: ScanSourceArgs) -> eyre::Result<()> {
         });
 
         let compare_strategy = if args.force {
-            Some(ItemCompareStrategy::Always)
+            Some(ItemCompareStrategy::Force)
         } else if args.by_content {
             Some(ItemCompareStrategy::Content)
         } else {
@@ -255,13 +255,14 @@ fn scan_source(state: &mut AppState, args: ScanSourceArgs) -> eyre::Result<()> {
     println!("Finished in {} seconds", start_time.elapsed().as_secs());
 
     println!("Rebuilding search");
+    let start_time = std::time::Instant::now();
     state.searcher = perceive_core::search::Searcher::build(
         &state.database,
         state.model_id,
         state.model_version,
     )?;
 
-    println!("Done");
+    println!("Built search in {} seconds", start_time.elapsed().as_secs());
 
     Ok(())
 }

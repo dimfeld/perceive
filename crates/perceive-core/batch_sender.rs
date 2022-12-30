@@ -1,27 +1,29 @@
-use std::{ops::Deref, sync::Arc};
+use std::{fmt::Debug, ops::Deref, sync::Arc};
 
 use crossbeam::queue::SegQueue;
 use parking_lot::Mutex;
 
-#[derive(Debug)]
-pub struct BatchSender<T: Send + Sync>(Arc<BatchSenderInner<T>>);
+use crate::sources::import::CountingVecSender;
 
-impl<T: Send + Sync> Clone for BatchSender<T> {
+#[derive(Debug)]
+pub struct BatchSender<'a, T: Send + Sync>(Arc<BatchSenderInner<'a, T>>);
+
+impl<'a, T: Send + Sync> Clone for BatchSender<'a, T> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
-impl<T: Send + Sync> Deref for BatchSender<T> {
-    type Target = BatchSenderInner<T>;
+impl<'a, T: Send + Sync> Deref for BatchSender<'a, T> {
+    type Target = BatchSenderInner<'a, T>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl<T: Send + Sync> BatchSender<T> {
-    pub fn new(threshold: usize, tx: flume::Sender<Vec<T>>) -> Self {
+impl<'a, T: Send + Sync> BatchSender<'a, T> {
+    pub fn new(threshold: usize, tx: CountingVecSender<'a, T>) -> Self {
         Self(Arc::new(BatchSenderInner {
             buffer: SegQueue::new(),
             flush_lock: Mutex::new(()),
@@ -31,15 +33,24 @@ impl<T: Send + Sync> BatchSender<T> {
     }
 }
 
-#[derive(Debug)]
-pub struct BatchSenderInner<T: Send + Sync> {
+pub struct BatchSenderInner<'a, T: Send + Sync> {
     buffer: SegQueue<T>,
     threshold: usize,
     flush_lock: Mutex<()>,
-    tx: flume::Sender<Vec<T>>,
+    tx: CountingVecSender<'a, T>,
 }
 
-impl<T: Send + Sync> BatchSenderInner<T> {
+impl<'a, T: Send + Sync> Debug for BatchSenderInner<'a, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BatchSenderInner")
+            .field("buffer", &self.buffer)
+            .field("threshold", &self.threshold)
+            .field("flush_lock", &self.flush_lock)
+            .finish()
+    }
+}
+
+impl<'a, T: Send + Sync> BatchSenderInner<'a, T> {
     pub fn add(&self, item: T) -> Result<(), flume::SendError<Vec<T>>> {
         self.buffer.push(item);
 
@@ -82,7 +93,7 @@ impl<T: Send + Sync> BatchSenderInner<T> {
     }
 }
 
-impl<T: Send + Sync> Drop for BatchSenderInner<T> {
+impl<'a, T: Send + Sync> Drop for BatchSenderInner<'a, T> {
     fn drop(&mut self) {
         self.flush(true).ok();
     }
@@ -90,11 +101,15 @@ impl<T: Send + Sync> Drop for BatchSenderInner<T> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicU64;
+
     use super::*;
 
     #[test]
     fn sends_nothing() {
         let (tx, rx) = flume::unbounded();
+        let cnt = AtomicU64::new(0);
+        let tx = CountingVecSender { count: &cnt, tx };
 
         let sender = BatchSender::<i32>::new(5, tx);
 
@@ -106,6 +121,8 @@ mod tests {
     #[test]
     fn sends_exact_batch_size() {
         let (tx, rx) = flume::unbounded();
+        let cnt = AtomicU64::new(0);
+        let tx = CountingVecSender { count: &cnt, tx };
 
         let sender = BatchSender::new(5, tx);
 
@@ -124,6 +141,8 @@ mod tests {
     #[test]
     fn sends_multiple_batches() {
         let (tx, rx) = flume::unbounded();
+        let cnt = AtomicU64::new(0);
+        let tx = CountingVecSender { count: &cnt, tx };
 
         let sender = BatchSender::new(2, tx);
 
@@ -145,6 +164,8 @@ mod tests {
     #[test]
     fn ends_at_batch_size_multiple() {
         let (tx, rx) = flume::unbounded();
+        let cnt = AtomicU64::new(0);
+        let tx = CountingVecSender { count: &cnt, tx };
 
         let sender = BatchSender::new(3, tx);
 
@@ -166,6 +187,8 @@ mod tests {
     #[test]
     fn multiple_threads() {
         let (tx, rx) = flume::unbounded();
+        let cnt = AtomicU64::new(0);
+        let tx = CountingVecSender { count: &cnt, tx };
         let sender = BatchSender::new(3, tx);
 
         let num_threads = 10;

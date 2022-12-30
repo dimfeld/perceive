@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{io::Write, path::PathBuf};
 
 use perceive_core::{
     db::Database,
@@ -25,8 +25,12 @@ impl AppState {
         let model_version = 0;
 
         let sources = perceive_core::sources::db::list_sources(&db)?;
-        println!("Building search...");
+        let start = std::time::Instant::now();
+        print!("Building search... ");
+        std::io::stdout().flush().ok();
         let searcher = perceive_core::search::Searcher::build(&db, model_id, model_version)?;
+        let time = start.elapsed();
+        println!("finished in {}s", time.as_secs());
 
         Ok(AppState {
             model: Some(Model::new_pretrained(model_type)?),

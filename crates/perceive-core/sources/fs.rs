@@ -1,8 +1,13 @@
+use std::borrow::Cow;
+
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use super::import::{FoundItem, SourceScanner, SourceScannerReadResult};
-use crate::{batch_sender::BatchSender, Item};
+use super::{
+    import::{CountingVecSender, FoundItem, SourceScanner, SourceScannerReadResult},
+    ItemCompareStrategy,
+};
+use crate::{batch_sender::BatchSender, Item, ItemMetadata};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FsSourceConfig {
@@ -16,7 +21,7 @@ pub struct FileScanner {
 }
 
 impl SourceScanner for FileScanner {
-    fn scan(&self, output: flume::Sender<Vec<Item>>) -> Result<(), eyre::Report> {
+    fn scan(&self, output: CountingVecSender<Item>) -> Result<(), eyre::Report> {
         let mut glob_builder = globset::GlobSetBuilder::new();
         if self.config.globs.is_empty() {
             glob_builder.add(globset::Glob::new("*")?);
@@ -43,6 +48,7 @@ impl SourceScanner for FileScanner {
     fn read(
         &self,
         _existing: Option<&FoundItem>,
+        _compare_strategy: ItemCompareStrategy,
         item: &mut Item,
     ) -> Result<SourceScannerReadResult, eyre::Report> {
         let Ok(content) = std::fs::read_to_string(std::path::Path::new(&item.external_id)) else {
@@ -59,30 +65,63 @@ impl SourceScanner for FileScanner {
             return Ok(SourceScannerReadResult::Omit);
         }
 
-        let parser = gray_matter::Matter::<gray_matter::engine::YAML>::new();
-        if let Some(parsed) = parser.parse_with_struct::<FileAttributes>(&content) {
-            item.metadata.name = parsed.data.title.or(parsed.data.name);
-            item.metadata.description = parsed.data.description.or(parsed.data.summary);
-            item.metadata.author = parsed.data.author;
-            item.content = Some(parsed.content);
+        if let Some(doc_content) = process_content(&content, &mut item.metadata) {
+            item.content = Some(doc_content);
+
+            let compressed = zstd::encode_all(content.as_bytes(), 3)?;
+            item.raw_content = Some(compressed);
         } else {
             item.content = Some(content);
         }
 
         Ok(SourceScannerReadResult::Found)
     }
+
+    fn reprocess(&self, item: &mut Item) -> Result<SourceScannerReadResult, eyre::Report> {
+        let content = match (item.raw_content.as_ref(), item.content.as_ref()) {
+            (Some(buffer), _) => {
+                let decompressed = zstd::decode_all(buffer.as_slice())?;
+                Cow::Owned(String::from_utf8(decompressed)?)
+            }
+            (None, Some(content)) => Cow::Borrowed(content),
+            (None, None) => return Ok(SourceScannerReadResult::Unchanged),
+        };
+
+        if let Some(content) = process_content(&content, &mut item.metadata) {
+            item.content = Some(content);
+            Ok(SourceScannerReadResult::Found)
+        } else {
+            Ok(SourceScannerReadResult::Unchanged)
+        }
+    }
+}
+
+fn process_content(content: &str, metadata: &mut ItemMetadata) -> Option<String> {
+    let parser = gray_matter::Matter::<gray_matter::engine::YAML>::new();
+    let Some(parsed) = parser.parse_with_struct::<FileAttributes>(&content) else {
+        return None;
+    };
+
+    metadata.name = parsed.data.title.or(parsed.data.name);
+    metadata.description = parsed.data.description.or(parsed.data.summary);
+    metadata.author = parsed.data.author;
+
+    Some(parsed.content)
 }
 
 const BATCH_SIZE: usize = 64;
 
-struct FileVisitorBuilder {
+struct FileVisitorBuilder<'a> {
     source_id: i64,
     glob: globset::GlobSet,
-    output: flume::Sender<Vec<Item>>,
+    output: CountingVecSender<'a, Item>,
 }
 
-impl<'s> ignore::ParallelVisitorBuilder<'s> for FileVisitorBuilder {
-    fn build(&mut self) -> Box<dyn ignore::ParallelVisitor + 's> {
+impl<'a, 's> ignore::ParallelVisitorBuilder<'s> for FileVisitorBuilder<'a>
+where
+    'a: 's,
+{
+    fn build(&mut self) -> Box<dyn ignore::ParallelVisitor + 'a> {
         Box::new(FileVisitor {
             source_id: self.source_id,
             glob: self.glob.clone(),
@@ -91,13 +130,13 @@ impl<'s> ignore::ParallelVisitorBuilder<'s> for FileVisitorBuilder {
     }
 }
 
-struct FileVisitor {
+struct FileVisitor<'a> {
     source_id: i64,
     glob: globset::GlobSet,
-    sender: BatchSender<Item>,
+    sender: BatchSender<'a, Item>,
 }
 
-impl ignore::ParallelVisitor for FileVisitor {
+impl<'a> ignore::ParallelVisitor for FileVisitor<'a> {
     fn visit(&mut self, entry: Result<ignore::DirEntry, ignore::Error>) -> ignore::WalkState {
         if let Ok(entry) = entry {
             let meta = match entry.metadata() {
