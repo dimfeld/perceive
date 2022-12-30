@@ -51,6 +51,37 @@ impl Searcher {
         Ok(Searcher { sources })
     }
 
+    pub fn rebuild_source(
+        &mut self,
+        database: &Database,
+        source_id: i64,
+        source_name: String,
+        model_id: u32,
+        model_version: u32,
+        #[cfg(feature = "cli")] progress: Option<indicatif::MultiProgress>,
+    ) -> Result<(), eyre::Report> {
+        let conn = database.read_pool.get()?;
+
+        let sources = Self::build_sources(
+            &conn,
+            model_id,
+            model_version,
+            vec![(source_id, source_name)],
+            progress,
+        )?;
+
+        let Some(result_source) = sources.into_iter().next() else {
+            return Ok(());
+        };
+
+        match self.sources.iter().position(|s| s.id == source_id) {
+            Some(index) => self.sources[index] = result_source,
+            None => self.sources.push(result_source),
+        }
+
+        Ok(())
+    }
+
     fn build_sources(
         conn: &Connection,
         model_id: u32,
@@ -145,7 +176,7 @@ impl Searcher {
             .collect::<Vec<_>>();
 
         results.sort_unstable_by(|a, b| a.score.partial_cmp(&b.score).unwrap());
-
+        results.truncate(num_results);
         results
     }
 
@@ -168,7 +199,7 @@ impl Searcher {
             r##"SELECT id, source_id, external_id, content, name, author, description, modified, last_accessed
             FROM items WHERE skipped is NULL AND id IN rarray(?)"##)?;
 
-        let rows = stmt
+        let mut rows = stmt
             .query_map([Rc::new(values)], |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
@@ -201,6 +232,7 @@ impl Searcher {
             })
             .collect::<Result<Vec<_>, DbError>>()?;
 
+        rows.sort_unstable_by(|a, b| a.1.score.partial_cmp(&b.1.score).unwrap());
         Ok(rows)
     }
 }
