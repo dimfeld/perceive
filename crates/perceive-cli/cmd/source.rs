@@ -255,7 +255,7 @@ fn scan_source(state: &mut AppState, args: ScanSourceArgs) -> eyre::Result<()> {
     println!("Finished in {} seconds", start_time.elapsed().as_secs());
 
     println!("Rebuilding search...");
-    let progress = indicatif::ProgressBar::new(0);
+    let progress = indicatif::MultiProgress::new();
     state.searcher = perceive_core::search::Searcher::build(
         &state.database,
         state.model_id,

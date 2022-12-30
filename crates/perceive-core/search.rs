@@ -1,5 +1,8 @@
 use std::rc::Rc;
 
+use indicatif::ProgressStyle;
+use rayon::prelude::*;
+use rusqlite::Connection;
 use time::OffsetDateTime;
 
 use crate::{
@@ -18,8 +21,13 @@ pub struct SearchItem {
     pub score: f32,
 }
 
-pub struct Searcher {
+struct SourceSearch {
+    id: i64,
     hnsw: instant_distance::HnswMap<Point, i64>,
+}
+
+pub struct Searcher {
+    sources: Vec<SourceSearch>,
 }
 
 impl Searcher {
@@ -27,60 +35,118 @@ impl Searcher {
         database: &Database,
         model_id: u32,
         model_version: u32,
-        #[cfg(feature = "cli")] progress: Option<indicatif::ProgressBar>,
+        #[cfg(feature = "cli")] progress: Option<indicatif::MultiProgress>,
     ) -> Result<Searcher, eyre::Report> {
         let conn = database.read_pool.get()?;
 
-        let mut stmt = conn.prepare_cached(
-            r##"SELECT items.id, embedding
+        let mut sources_stmt = conn.prepare("SELECT id, name FROM sources")?;
+        let sources = sources_stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let sources = Self::build_sources(&conn, model_id, model_version, sources, progress)?;
+
+        Ok(Searcher { sources })
+    }
+
+    fn build_sources(
+        conn: &Connection,
+        model_id: u32,
+        model_version: u32,
+        sources: Vec<(i64, String)>,
+        #[cfg(feature = "cli")] progress: Option<indicatif::MultiProgress>,
+    ) -> Result<Vec<SourceSearch>, eyre::Report> {
+        let mut sources = sources
+            .into_iter()
+            .map(|(id, name)| (id, name, Vec::new(), Vec::new()))
+            .collect::<Vec<_>>();
+
+        let mut stmt = conn.prepare(
+            r##"SELECT items.id, source_id, embedding
         FROM items
         JOIN item_embeddings ie ON model_id=? AND model_version=? AND ie.item_id=items.id
         WHERE skipped IS NULL"##,
         )?;
 
         let rows = stmt.query_and_then([model_id, model_version], |row| {
-            let value: (i64, Vec<f32>) = (
+            let value: (i64, i64, Vec<f32>) = (
                 row.get(0)?,
-                deserialize_embedding(row.get_ref(1)?.as_blob().map_err(DbError::query)?),
+                row.get(1)?,
+                deserialize_embedding(row.get_ref(2)?.as_blob().map_err(DbError::query)?),
             );
 
             Ok::<_, DbError>(value)
         })?;
 
-        let mut points = Vec::new();
-        let mut values = Vec::new();
-
         for row in rows {
-            let (id, embedding) = row?;
-            points.push(Point::from(embedding));
-            values.push(id);
+            let (id, source, embedding) = row?;
+            let source_points = sources.iter_mut().find(|x| x.0 == source);
+            let Some(source_points) = source_points else {
+                continue;
+            };
+
+            source_points.2.push(Point::from(embedding));
+            source_points.3.push(id);
         }
 
-        let hnsw = instant_distance::Builder::default();
+        let longest_name = sources.iter().map(|x| x.1.len()).max().unwrap_or(20);
+        let progress_template = format!("{{prefix:{longest_name}}} {{bar:40}} {{pos}}/{{len}}");
 
-        #[cfg(feature = "cli")]
-        let hnsw = if let Some(progress) = progress {
-            hnsw.progress(progress)
-        } else {
-            hnsw
-        };
+        let source_search = sources
+            .into_par_iter()
+            .filter(|(_, _, points, _)| !points.is_empty())
+            .map(|(source_id, name, points, values)| {
+                let hnsw = instant_distance::Builder::default();
 
-        let hnsw = hnsw.build(points, values);
+                #[cfg(feature = "cli")]
+                let hnsw = if let Some(progress) = &progress {
+                    let bar = indicatif::ProgressBar::new(0)
+                        .with_prefix(name)
+                        .with_style(ProgressStyle::with_template(&progress_template).unwrap());
 
-        Ok(Searcher { hnsw })
+                    hnsw.progress(progress.add(bar))
+                } else {
+                    hnsw
+                };
+
+                let hnsw = hnsw.build(points, values);
+
+                SourceSearch {
+                    id: source_id,
+                    hnsw,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        Ok(source_search)
     }
 
     pub fn search(&self, model: &Model, num_results: usize, query: &str) -> Vec<SearchItem> {
         let term_embedding: Vec<f32> = Vec::from(model.encode(&[query]).unwrap()).pop().unwrap();
-        let mut searcher = instant_distance::Search::default();
-        self.hnsw
-            .search(&Point::from(term_embedding), &mut searcher)
-            .map(|item| SearchItem {
-                id: *item.value,
-                score: item.distance,
+        let search_point = Point::from(term_embedding);
+
+        let mut results = self
+            .sources
+            .par_iter()
+            .flat_map_iter(|source| {
+                let mut searcher = instant_distance::Search::default();
+                source
+                    .hnsw
+                    .search(&search_point, &mut searcher)
+                    .take(num_results)
+                    .map(|item| SearchItem {
+                        id: *item.value,
+                        score: item.distance,
+                    })
+                    .collect::<Vec<_>>()
             })
-            .take(num_results)
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+
+        results.sort_unstable_by(|a, b| a.score.partial_cmp(&b.score).unwrap());
+
+        results
     }
 
     pub fn search_and_retrieve(
@@ -102,7 +168,7 @@ impl Searcher {
             r##"SELECT id, source_id, external_id, content, name, author, description, modified, last_accessed
             FROM items WHERE skipped is NULL AND id IN rarray(?)"##)?;
 
-        let mut rows = stmt
+        let rows = stmt
             .query_map([Rc::new(values)], |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
@@ -135,8 +201,6 @@ impl Searcher {
             })
             .collect::<Result<Vec<_>, DbError>>()?;
 
-        rows.sort_unstable_by(|a, b| a.1.score.partial_cmp(&b.1.score).unwrap());
-
         Ok(rows)
     }
 }
@@ -159,7 +223,7 @@ impl From<Vec<f32>> for Point {
 
 impl instant_distance::Point for Point {
     fn distance(&self, other: &Self) -> f32 {
-        self.0.dot(&other.0)
+        0.0 - self.0.dot(&other.0)
     }
 }
 

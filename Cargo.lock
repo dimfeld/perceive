@@ -1778,6 +1778,7 @@ dependencies = [
  "indicatif 0.17.2",
  "owo-colors",
  "perceive-core",
+ "rayon",
  "rusqlite",
  "rustyline",
  "shellexpand",
