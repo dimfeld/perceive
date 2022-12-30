@@ -105,8 +105,8 @@ pub struct ScanStats {
 }
 
 pub struct CountingVecSender<'a, T> {
-    tx: flume::Sender<Vec<T>>,
-    count: &'a AtomicU64,
+    pub(crate) tx: flume::Sender<Vec<T>>,
+    pub(crate) count: &'a AtomicU64,
 }
 
 impl<'a, T> Clone for CountingVecSender<'a, T> {

@@ -8,6 +8,10 @@ use crate::{
     Item, ItemMetadata,
 };
 
+// This ensures that blas_src actually gets included, since it's not used elsewhere.
+// https://github.com/rust-ndarray/ndarray#how-to-enable-blas-integration
+extern crate blas_src;
+
 #[derive(Debug, Copy, Clone)]
 pub struct SearchItem {
     pub id: i64,
@@ -23,6 +27,7 @@ impl Searcher {
         database: &Database,
         model_id: u32,
         model_version: u32,
+        #[cfg(feature = "cli")] progress: Option<indicatif::ProgressBar>,
     ) -> Result<Searcher, eyre::Report> {
         let conn = database.read_pool.get()?;
 
@@ -47,20 +52,29 @@ impl Searcher {
 
         for row in rows {
             let (id, embedding) = row?;
-            points.push(Point(embedding));
+            points.push(Point::from(embedding));
             values.push(id);
         }
 
-        let hnsw = instant_distance::Builder::default().build(points, values);
+        let hnsw = instant_distance::Builder::default();
+
+        #[cfg(feature = "cli")]
+        let hnsw = if let Some(progress) = progress {
+            hnsw.progress(progress)
+        } else {
+            hnsw
+        };
+
+        let hnsw = hnsw.build(points, values);
 
         Ok(Searcher { hnsw })
     }
 
     pub fn search(&self, model: &Model, num_results: usize, query: &str) -> Vec<SearchItem> {
-        let term_embedding = Vec::from(model.encode(&[query]).unwrap()).pop().unwrap();
+        let term_embedding: Vec<f32> = Vec::from(model.encode(&[query]).unwrap()).pop().unwrap();
         let mut searcher = instant_distance::Search::default();
         self.hnsw
-            .search(&Point(term_embedding), &mut searcher)
+            .search(&Point::from(term_embedding), &mut searcher)
             .map(|item| SearchItem {
                 id: *item.value,
                 score: item.distance,
@@ -128,16 +142,24 @@ impl Searcher {
 }
 
 #[derive(Clone)]
-pub struct Point(Vec<f32>);
+pub struct Point(ndarray::Array1<f32>);
+
+impl From<tch::Tensor> for Point {
+    fn from(value: tch::Tensor) -> Self {
+        let v = Vec::<f32>::from(value);
+        Point(ndarray::Array1::from(v))
+    }
+}
+
+impl From<Vec<f32>> for Point {
+    fn from(value: Vec<f32>) -> Self {
+        Point(ndarray::Array1::from(value))
+    }
+}
 
 impl instant_distance::Point for Point {
     fn distance(&self, other: &Self) -> f32 {
-        1.0 - self
-            .0
-            .iter()
-            .zip(other.0.iter())
-            .map(|(a, b)| (a * b))
-            .sum::<f32>()
+        self.0.dot(&other.0)
     }
 }
 

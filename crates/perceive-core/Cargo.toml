@@ -11,6 +11,8 @@ path = "lib.rs"
 [dependencies]
 ahash = "0.8.2"
 byteorder = "1.4.3"
+# Need to use OpenBLAS or something on non-Mac platforms since Accelerate is Mac-specific
+blas-src = { version = "0.8", default-features = false, features = ["accelerate"] }
 clap = { version = "4.0.32", features = ["derive"], optional = true }
 crossbeam = "0.8.2"
 directories = "4.0.1"
@@ -22,8 +24,10 @@ html2text = { version = "0.4.4", optional = true }
 http = "0.2.8"
 httpdate = { version = "1.0.2", optional = true }
 ignore = "0.4.18"
-instant-distance = "0.6.0"
+indicatif = { version = "0.17.2", optional = true }
+instant-distance = { version = "0.6.0" }
 itertools = "0.10.5"
+ndarray = { version = "0.15.6", features = ["blas"] }
 once_cell = { version = "1.16.0", features = ["parking_lot"] }
 parking_lot = "0.12.1"
 r2d2 = "0.8.10"
@@ -50,5 +54,5 @@ zstd = "0.12.1"
 
 [features]
 default = ["browser-history"]
-clap = ["dep:clap"]
+cli = ["dep:clap", "dep:indicatif", "instant-distance/indicatif"]
 browser-history = ["dep:html2text", "dep:readability", "dep:reqwest", "dep:httpdate"]

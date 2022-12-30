@@ -254,12 +254,13 @@ fn scan_source(state: &mut AppState, args: ScanSourceArgs) -> eyre::Result<()> {
 
     println!("Finished in {} seconds", start_time.elapsed().as_secs());
 
-    println!("Rebuilding search");
-    let start_time = std::time::Instant::now();
+    println!("Rebuilding search...");
+    let progress = indicatif::ProgressBar::new(0);
     state.searcher = perceive_core::search::Searcher::build(
         &state.database,
         state.model_id,
         state.model_version,
+        Some(progress),
     )?;
 
     println!("Built search in {} seconds", start_time.elapsed().as_secs());

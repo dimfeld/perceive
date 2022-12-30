@@ -26,11 +26,11 @@ impl AppState {
 
         let sources = perceive_core::sources::db::list_sources(&db)?;
         let start = std::time::Instant::now();
-        print!("Building search... ");
-        std::io::stdout().flush().ok();
-        let searcher = perceive_core::search::Searcher::build(&db, model_id, model_version)?;
-        let time = start.elapsed();
-        println!("finished in {}s", time.as_secs());
+        println!("Building search... ");
+        let progress = indicatif::ProgressBar::new(0);
+        let searcher =
+            perceive_core::search::Searcher::build(&db, model_id, model_version, Some(progress))?;
+        println!("Built search in {} seconds", start.elapsed().as_secs());
 
         Ok(AppState {
             model: Some(Model::new_pretrained(model_type)?),
