@@ -7,6 +7,7 @@ pub mod sources;
 pub mod time_tracker;
 
 use serde::{Deserialize, Serialize};
+use strum::{Display, EnumString};
 use tch::{Kind, Tensor};
 use time::OffsetDateTime;
 
@@ -19,6 +20,14 @@ pub struct ItemMetadata {
     pub atime: Option<OffsetDateTime>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Display, EnumString, Deserialize)]
+#[strum(serialize_all = "snake_case")]
+pub enum SkipReason {
+    NotFound,
+    FetchError,
+    Unauthorized,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Item {
     pub source_id: i64,
@@ -26,8 +35,8 @@ pub struct Item {
     pub external_id: String,
     pub hash: Option<String>,
     pub content: Option<String>,
-    #[serde(flatten)]
     pub metadata: ItemMetadata,
+    pub skipped: Option<SkipReason>,
 }
 
 pub fn dot_product(set1: &Tensor, set2: &Tensor) -> Tensor {

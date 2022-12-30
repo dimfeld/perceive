@@ -62,11 +62,11 @@ impl<T: Send + Sync> BatchSenderInner<T> {
             }
         };
 
-        if self.buffer.is_empty() {
+        let output_len = self.buffer.len();
+        if output_len == 0 {
             return Ok(());
         }
 
-        let output_len = self.buffer.len();
         let mut output = Vec::with_capacity(self.buffer.len());
         while output.len() < output_len && !self.buffer.is_empty() {
             if let Some(item) = self.buffer.pop() {

@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use clap::{ArgMatches, Args as ArgsTrait, Command, CommandFactory, FromArgMatches};
+use clap::{ArgMatches, Command, CommandFactory, FromArgMatches};
 use eyre::eyre;
 use rustyline::{error::ReadlineError, Editor};
 use thiserror::Error;

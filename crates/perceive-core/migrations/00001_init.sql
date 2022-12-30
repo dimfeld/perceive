@@ -54,6 +54,7 @@ CREATE TABLE items (
   description TEXT,
   modified BIGINT,
   last_accessed BIGINT,
+  skipped TEXT,
   -- Set if the user chose to hide this item from the search results
   hidden_at BIGINT
 );

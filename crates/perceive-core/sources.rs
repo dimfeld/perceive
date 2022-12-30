@@ -1,18 +1,24 @@
+#[cfg(feature = "browser-history")]
+pub mod chromium_history;
 pub mod db;
 mod fs;
 pub mod import;
 
+pub use fs::FsSourceConfig;
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString};
 use time::OffsetDateTime;
 
-pub use self::fs::FsSourceConfig;
+#[cfg(feature = "browser-history")]
+pub use self::chromium_history::ChromiumHistoryConfig;
 use self::import::SourceScanner;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum SourceConfig {
     Fs(FsSourceConfig),
+    #[cfg(feature = "browser-history")]
+    ChromiumHistory(ChromiumHistoryConfig),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,9 +35,12 @@ pub enum SourceStatus {
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum ItemCompareStrategy {
+    /// Compare the modified time and the content of the item.
     #[default]
     MTimeAndContent,
+    /// Compare only the modified time of the item
     MTime,
+    /// Compare the content of the item
     Content,
     /// Always consider the item changed
     Always,
@@ -66,13 +75,23 @@ pub struct Source {
 }
 
 impl Source {
-    fn create_scanner(&self) -> Box<dyn SourceScanner> {
-        match &self.config {
+    fn create_scanner(&self) -> Result<Box<dyn SourceScanner>, eyre::Report> {
+        let scanner: Box<dyn SourceScanner> = match &self.config {
             SourceConfig::Fs(config) => Box::new(fs::FileScanner {
                 source_id: self.id,
                 location: self.location.clone(),
                 config: config.clone(),
             }),
-        }
+            #[cfg(feature = "browser-history")]
+            SourceConfig::ChromiumHistory(config) => {
+                Box::new(chromium_history::ChromiumHistoryScanner::new(
+                    self.id,
+                    self.location.clone(),
+                    config.clone(),
+                )?)
+            }
+        };
+
+        Ok(scanner)
     }
 }

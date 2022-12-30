@@ -29,7 +29,8 @@ impl Searcher {
         let mut stmt = conn.prepare_cached(
             r##"SELECT items.id, embedding
         FROM items
-        JOIN item_embeddings ie ON model_id=? AND model_version=? AND ie.item_id=items.id"##,
+        JOIN item_embeddings ie ON model_id=? AND model_version=? AND ie.item_id=items.id
+        WHERE skipped IS NULL"##,
         )?;
 
         let rows = stmt.query_and_then([model_id, model_version], |row| {
@@ -85,7 +86,7 @@ impl Searcher {
         let conn = database.read_pool.get()?;
         let mut stmt = conn.prepare_cached(
             r##"SELECT id, source_id, external_id, content, name, author, description, modified, last_accessed
-            FROM items WHERE id IN rarray(?)"##)?;
+            FROM items WHERE skipped is NULL AND id IN rarray(?)"##)?;
 
         let mut rows = stmt
             .query_map([Rc::new(values)], |row| {
@@ -96,6 +97,7 @@ impl Searcher {
                         external_id: row.get(2)?,
                         content: row.get(3)?,
                         hash: None,
+                        skipped: None,
                         metadata: ItemMetadata {
                             name: row.get(4)?,
                             author: row.get(5)?,

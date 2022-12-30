@@ -9,7 +9,8 @@ pub struct SearchArgs {
     /// The query to search for
     pub query: String,
 
-    #[clap(short, long, default_value_t = 10)]
+    /// Return this number of search results
+    #[clap(short, long, default_value_t = 20)]
     pub num_results: usize,
 }
 
@@ -33,7 +34,13 @@ pub fn search(state: &mut AppState, args: SearchArgs) -> Result<()> {
     for (index, (result, item)) in results.iter().enumerate() {
         let desc = result.metadata.name.as_ref().unwrap_or(&result.external_id);
         let highlight = highlights[index].replace('\n', "•");
-        println!("{:.2}: {} - {highlight}", item.score.abs(), desc.bold());
+        let source_name = state
+            .sources
+            .iter()
+            .find(|s| s.id == result.source_id)
+            .map(|s| s.name.as_str())
+            .unwrap_or_default();
+        println!("{} - {} - {highlight}", source_name, desc.bold());
     }
 
     Ok(())

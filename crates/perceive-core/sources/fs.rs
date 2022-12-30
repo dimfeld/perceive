@@ -7,7 +7,6 @@ use crate::{batch_sender::BatchSender, Item};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FsSourceConfig {
     pub globs: Vec<String>,
-    pub overrides: Vec<String>,
 }
 
 pub struct FileScanner {
@@ -53,11 +52,11 @@ impl SourceScanner for FileScanner {
             //
             // Future iterations of this will also try to process other file formats that aren't plain
             // text but do contain text (i.e. Word, Pages, etc.).
-            return Ok((SourceScannerReadResult::Skip, item));
+            return Ok((SourceScannerReadResult::Omit, item));
         };
 
         if content.trim().is_empty() {
-            return Ok((SourceScannerReadResult::Skip, item));
+            return Ok((SourceScannerReadResult::Omit, item));
         }
 
         let parser = gray_matter::Matter::<gray_matter::engine::YAML>::new();
@@ -115,6 +114,7 @@ impl ignore::ParallelVisitor for FileVisitor {
                     external_id: entry.path().to_string_lossy().to_string(),
                     hash: None,
                     content: None,
+                    skipped: None,
                     metadata: crate::ItemMetadata {
                         name: None,
                         author: None,

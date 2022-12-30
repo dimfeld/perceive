@@ -1,5 +1,6 @@
 use std::{
     borrow::Cow,
+    fmt::Display,
     rc::Rc,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -12,7 +13,7 @@ use rusqlite::{named_params, params, types::Value};
 use super::{ItemCompareStrategy, Source};
 use crate::{
     batch_sender::BatchSender, db::Database, model::Model, search::serialize_embedding,
-    time_tracker::TimeTracker, Item,
+    time_tracker::TimeTracker, Item, SkipReason,
 };
 
 /// Data returned when the source scanner tries to read an item.
@@ -26,10 +27,10 @@ pub enum SourceScannerReadResult {
     /// Although the data showed up in the scanner, it failed to actually read it. For example,
     /// the scanner may be reading from the browser history but when it comes time to actually read
     /// the page, the server returns a 404 error.
-    Skip,
+    Omit,
 }
 
-pub trait SourceScanner: Send + Sync {
+pub(super) trait SourceScanner: Send + Sync {
     /// Scan the sources and output batches of found items
     fn scan(&self, output: flume::Sender<Vec<Item>>) -> Result<(), eyre::Report>;
     /// Read the full content of a single item. If the function reads the file and determines that
@@ -41,12 +42,14 @@ pub trait SourceScanner: Send + Sync {
     ) -> Result<(SourceScannerReadResult, Item), eyre::Report>;
 }
 
-pub struct FoundItem {
-    id: i64,
-    hash: String,
-    content: String,
-    modified: Option<i64>,
-    has_embedding: bool,
+pub(super) struct FoundItem {
+    pub id: i64,
+    pub hash: String,
+    pub content: String,
+    pub modified: Option<i64>,
+    pub last_accessed: Option<i64>,
+    pub skipped: Option<SkipReason>,
+    pub has_embedding: bool,
 }
 
 enum ScanItemState {
@@ -81,9 +84,13 @@ struct ScanItem {
 pub struct ScanStats {
     pub scanned: AtomicU64,
     pub encoded: AtomicU64,
+    pub fetched: AtomicU64,
     pub added: AtomicU64,
     pub changed: AtomicU64,
     pub unchanged: AtomicU64,
+
+    pub reading: AtomicU64,
+    pub embedding: AtomicU64,
 
     pub scan_time: TimeTracker,
     pub read_time: TimeTracker,
@@ -99,16 +106,19 @@ pub fn scan_source(
     model_version: u32,
     source: &Source,
     override_compare_strategy: Option<ItemCompareStrategy>,
-) -> Model {
-    let scanner = source.create_scanner();
+) -> Result<Model, (Model, eyre::Report)> {
+    let scanner = match source.create_scanner() {
+        Ok(scanner) => scanner,
+        Err(e) => return Err((model, e)),
+    };
     let compare_strategy = override_compare_strategy.unwrap_or(source.compare_strategy);
 
     #[allow(clippy::let_and_return)] // Much easier to read this way
     let returned_model = std::thread::scope(|scope| {
-        let (item_tx, item_rx) = flume::bounded(8);
-        let (matched_tx, matched_rx) = flume::bounded(8);
-        let (with_content_tx, with_content_rx) = flume::bounded(8);
-        let (with_embeddings_tx, with_embeddings_rx) = flume::bounded(8);
+        let (item_tx, item_rx) = flume::unbounded();
+        let (matched_tx, matched_rx) = flume::unbounded();
+        let (with_content_tx, with_content_rx) = flume::unbounded();
+        let (with_embeddings_tx, with_embeddings_rx) = flume::unbounded();
 
         // Make a pipeline with the following stages:
         // - Scan the file system and send out batches of items
@@ -139,7 +149,7 @@ pub fn scan_source(
         // - If the content did not change, skip the item.
         let read_task = scope.spawn(|| {
             read_items(
-                &times.read_time,
+                times,
                 compare_strategy,
                 scanner.as_ref(),
                 matched_rx,
@@ -165,24 +175,53 @@ pub fn scan_source(
             )
         });
 
-        // TODO - handle errors
-        write_db_task.join().unwrap().unwrap();
+        fn log_thread_error<T, E: Display>(
+            name: &str,
+            r: std::thread::Result<Result<T, E>>,
+        ) -> bool {
+            match r {
+                Err(e) => {
+                    eprintln!("Thread {name} panicked: {:?}", e);
+                    true
+                }
+                Ok(Err(e)) => {
+                    eprintln!("Thread {name} failed: {}", e);
+                    true
+                }
+                Ok(Ok(_)) => {
+                    eprintln!("Thread {name} finished successfully");
+                    false
+                }
+            }
+        }
+
+        // TODO - handle errors better
+        let mut errored = false;
+        errored = errored || log_thread_error("db_writer", write_db_task.join());
         let returned_model = match embed_task.join().unwrap() {
             Ok(model) => model,
-            Err((model, _)) => model,
+            Err((model, e)) => {
+                errored = true;
+                eprintln!("Encoding thread error: {e}");
+                model
+            }
         };
-        read_task.join().unwrap().unwrap();
-        db_lookup_task.join().unwrap().unwrap();
-        scan_task.join().unwrap().unwrap();
+        errored = errored || log_thread_error("read_items", read_task.join());
+        errored = errored || log_thread_error("db_lookup", db_lookup_task.join());
+        errored = errored || log_thread_error("scanner", scan_task.join());
+
+        if errored {
+            println!("Scanning failed");
+        }
 
         returned_model
     });
 
-    // AFTER PIPELINE
+    // AFTER PIPELINE TODO
     // - Delete any items for which the index_version did not get updated to
     //   the latest vesion.
 
-    returned_model
+    Ok(returned_model)
 }
 
 fn match_to_existing_items(
@@ -199,7 +238,7 @@ fn match_to_existing_items(
 
     let mut stmt = conn.prepare_cached(
         r##"
-        SELECT external_id, id, hash, modified, content, ie.item_id IS NOT NULL AS has_embedding
+        SELECT external_id, id, hash, modified, last_accessed, skipped, content, ie.item_id IS NOT NULL AS has_embedding
         FROM items
         LEFT JOIN item_embeddings ie ON ie.item_id = items.id AND model_id = ? AND model_version = ?
         WHERE source_id = ? AND external_id IN rarray(?)
@@ -220,21 +259,27 @@ fn match_to_existing_items(
             .collect::<Vec<_>>();
 
         let mut found = stmt
-            .query_map(
+            .query_and_then(
                 params![model_id, model_version, source_id, Rc::new(ids)],
                 |row| {
-                    Ok((
+                    Ok::<_, eyre::Report>((
                         row.get::<_, String>(0)?,
                         FoundItem {
                             id: row.get::<_, i64>(1)?,
                             hash: row.get::<_, String>(2)?,
                             modified: row.get::<_, Option<i64>>(3)?,
+                            last_accessed: row.get::<_, Option<i64>>(4)?,
+                            skipped: row
+                                .get_ref(5)?
+                                .as_str_or_null()?
+                                .map(|s| s.parse::<SkipReason>())
+                                .transpose()?,
                             content: if compare_strategy.should_compare_content() {
-                                row.get::<_, String>(4)?
+                                row.get::<_, String>(6)?
                             } else {
                                 String::new()
                             },
-                            has_embedding: row.get(5)?,
+                            has_embedding: row.get(7)?,
                         },
                     ))
                 },
@@ -281,7 +326,7 @@ fn match_to_existing_items(
 }
 
 fn read_items(
-    times: &TimeTracker,
+    stats: &ScanStats,
     compare_strategy: ItemCompareStrategy,
     scanner: &dyn SourceScanner,
     rx: flume::Receiver<Vec<ScanItem>>,
@@ -289,7 +334,7 @@ fn read_items(
 ) -> Result<(), eyre::Report> {
     let sender = BatchSender::new(64, tx);
     for batch in rx {
-        let _track = times.begin();
+        let _track = stats.read_time.begin();
 
         batch
             .into_par_iter()
@@ -306,7 +351,14 @@ fn read_items(
                     }
                 };
 
-                let (item, state) = match scanner.read(existing, item) {
+                let external_id = item.external_id.clone();
+
+                stats.reading.fetch_add(1, Ordering::Relaxed);
+                let read_result = scanner.read(existing, item);
+                stats.reading.fetch_sub(1, Ordering::Relaxed);
+                stats.fetched.fetch_add(1, Ordering::Relaxed);
+
+                let (item, state) = match read_result {
                     Ok((SourceScannerReadResult::Found, item)) => (item, state),
                     Ok((SourceScannerReadResult::Unchanged, item)) => {
                         if let Some(id) = state.item_id() {
@@ -317,16 +369,22 @@ fn read_items(
                             return Ok(());
                         }
                     }
-                    Ok((SourceScannerReadResult::Skip, _)) => {
+                    Ok((SourceScannerReadResult::Omit, _)) => {
                         return Ok(());
                     }
-                    // TODO - handle errors
-                    Err(_) => return Ok(()),
+                    Err(e) => {
+                        // TODO - better error handling
+                        eprintln!("{}: {e}", external_id);
+                        return Ok(());
+                    }
                 };
 
-                let compare_content = compare_strategy.should_compare_content();
+                let compare_content =
+                    item.skipped.is_none() && compare_strategy.should_compare_content();
                 let state = match state {
-                    ScanItemState::New => ScanItemState::New,
+                    ScanItemState::New
+                    | ScanItemState::Unchanged { .. }
+                    | ScanItemState::Changed(_) => state,
                     ScanItemState::Found(found) => {
                         if compare_content
                             && found.content != item.content.as_deref().unwrap_or_default()
@@ -336,8 +394,6 @@ fn read_items(
                             ScanItemState::Unchanged { id: found.id }
                         }
                     }
-                    ScanItemState::Changed(found) => ScanItemState::Changed(found),
-                    ScanItemState::Unchanged { .. } => unreachable!(),
                 };
 
                 sender.add(ScanItem { state, item })?;
@@ -354,16 +410,24 @@ fn calculate_embeddings(
     rx: flume::Receiver<Vec<ScanItem>>,
     tx: flume::Sender<Vec<(ScanItem, Option<Vec<f32>>)>>,
 ) -> Result<Model, (Model, eyre::Report)> {
-    let sender = BatchSender::new(2, tx);
+    let sender = BatchSender::new(16, tx);
     for batch in rx {
         let _track = stats.encode_time.begin();
 
-        let contents = batch
+        let (embedding_source, contents): (Vec<usize>, Vec<Cow<str>>) = batch
             .iter()
-            .filter(|item| matches!(item.state, ScanItemState::New | ScanItemState::Changed(_)))
-            .filter_map(|item| {
+            .enumerate()
+            .filter(|(_, item)| {
+                matches!(item.state, ScanItemState::New | ScanItemState::Changed(_))
+                    && item.item.skipped.is_none()
+            })
+            .filter_map(|(index, item)| {
                 if item.item.metadata.name.is_none() && item.item.metadata.description.is_none() {
-                    return item.item.content.as_deref().map(Cow::Borrowed);
+                    return item
+                        .item
+                        .content
+                        .as_deref()
+                        .map(|s| (index, Cow::Borrowed(s.trim())));
                 }
 
                 let document = [
@@ -373,15 +437,20 @@ fn calculate_embeddings(
                 ]
                 .into_iter()
                 .flatten()
+                .filter(|s| !s.trim().is_empty())
                 .join("\n");
 
                 if document.is_empty() {
                     None
                 } else {
-                    Some(Cow::Owned(document))
+                    Some((index, Cow::Owned(document)))
                 }
             })
-            .collect::<Vec<_>>();
+            .multiunzip();
+
+        stats
+            .embedding
+            .fetch_add(contents.len() as u64, Ordering::Relaxed);
 
         // TODO Don't unwrap. What is the proper way to handle an error here? Probably just quit
         // the index since it indicates some larger problem.
@@ -393,20 +462,26 @@ fn calculate_embeddings(
         };
 
         stats
+            .embedding
+            .fetch_sub(contents.len() as u64, Ordering::Relaxed);
+
+        stats
             .encoded
             .fetch_add(embeddings.len() as u64, Ordering::Relaxed);
 
         let mut embedding_index = 0;
-        for item in batch {
-            let embedding = match (&item.state, item.item.content.is_some()) {
-                (ScanItemState::New | ScanItemState::Changed(_), true) => {
-                    let embedding = std::mem::take(&mut embeddings[embedding_index]);
-                    embedding_index += 1;
-                    Some(embedding)
-                }
-                (ScanItemState::Unchanged { .. }, _) => None,
-                (ScanItemState::Found(_), _) => unreachable!(),
-                (_, false) => None,
+        for (index, item) in batch.into_iter().enumerate() {
+            let embedding = if embedding_source
+                .get(embedding_index)
+                .copied()
+                .unwrap_or(usize::MAX)
+                == index
+            {
+                let embedding = std::mem::take(&mut embeddings[embedding_index]);
+                embedding_index += 1;
+                Some(embedding)
+            } else {
+                None
             };
 
             if let Err(e) = sender.add((item, embedding)) {
@@ -446,7 +521,8 @@ fn update_db(
                 r##"
                 UPDATE items
                 SET version=:version, hash=:hash, content=:content, name=:name, author=:author,
-                    description=:description, modified=:modified, last_accessed=:last_accessed
+                    description=:description, modified=:modified, last_accessed=:last_accessed,
+                    skipped=:skipped
                 WHERE id=:id
                 "##,
             )?;
@@ -454,9 +530,9 @@ fn update_db(
             let mut new_stmt = tx.prepare_cached(
                 r##"
                 INSERT INTO items (source_id, external_id, version, hash, content, name, author,
-                    description, modified, last_accessed)
+                    description, modified, last_accessed, skipped)
                 VALUES (:source_id, :external_id, :version, :hash, :content, :name, :author,
-                    :description, :modified, :last_accessed);
+                    :description, :modified, :last_accessed, :skipped);
                 "##,
             )?;
 
@@ -470,12 +546,13 @@ fn update_db(
             )?;
 
             for (item, embedding) in &batch {
-                match (&item.state, embedding) {
-                    (ScanItemState::Unchanged { id }, _) => {
+                let item_id = match &item.state {
+                    ScanItemState::Unchanged { id } => {
                         unchanged_stmt.execute(params![index_version, id])?;
                         unchanged += 1;
+                        *id
                     }
-                    (ScanItemState::Changed(found), Some(embedding)) => {
+                    ScanItemState::Changed(found) => {
                         changed_stmt.execute(named_params! {
                             ":id": found.id,
                             ":version": index_version,
@@ -486,20 +563,13 @@ fn update_db(
                             ":description": item.item.metadata.description.as_deref(),
                             ":modified": item.item.metadata.mtime.map(|t| t.unix_timestamp()),
                             ":last_accessed": item.item.metadata.atime.map(|t| t.unix_timestamp()),
-                        })?;
-
-                        let bytes_vec = serialize_embedding(embedding);
-                        embedding_stmt.execute(named_params! {
-                            ":embedding": &bytes_vec,
-                            ":version": index_version,
-                            ":id": found.id,
-                            ":model_id": model_id,
-                            ":model_version": model_version,
+                            ":skipped": item.item.skipped.map(|s| s.to_string()),
                         })?;
 
                         changed += 1;
+                        found.id
                     }
-                    (ScanItemState::New, Some(embedding)) => {
+                    ScanItemState::New => {
                         new_stmt.execute(named_params! {
                             ":source_id": item.item.source_id,
                             ":external_id": item.item.external_id,
@@ -511,27 +581,26 @@ fn update_db(
                             ":description": item.item.metadata.description.as_deref(),
                             ":modified": item.item.metadata.mtime.map(|t| t.unix_timestamp()),
                             ":last_accessed": item.item.metadata.atime.map(|t| t.unix_timestamp()),
+                            ":skipped": item.item.skipped.map(|s| s.to_string()),
                         })?;
 
                         let row_id = tx.last_insert_rowid();
 
-                        let mut bytes_vec =
-                            Vec::with_capacity(embedding.len() * std::mem::size_of::<f32>());
-                        for value in embedding {
-                            bytes_vec.extend(value.to_le_bytes());
-                        }
-
-                        embedding_stmt.execute(named_params! {
-                            ":embedding": &bytes_vec,
-                            ":version": index_version,
-                            ":id": row_id,
-                            ":model_id": model_id,
-                            ":model_version": model_version,
-                        })?;
                         new += 1;
+                        row_id
                     }
-                    (_, None) => unreachable!(),
-                    (ScanItemState::Found(_), _) => unreachable!(),
+                    ScanItemState::Found(_) => unreachable!(),
+                };
+
+                if let Some(embedding) = embedding {
+                    let bytes_vec = serialize_embedding(embedding);
+                    embedding_stmt.execute(named_params! {
+                        ":embedding": &bytes_vec,
+                        ":version": index_version,
+                        ":id": item_id,
+                        ":model_id": model_id,
+                        ":model_version": model_version,
+                    })?;
                 }
             }
         }

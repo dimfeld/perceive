@@ -16,7 +16,7 @@ pub enum Commands {
     Refresh,
     /// Do a search
     Search(SearchArgs),
-    /// Configure the mODel
+    /// Configure the model
     Model(ModelArgs),
 }
 
