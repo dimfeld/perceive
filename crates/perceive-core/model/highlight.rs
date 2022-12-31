@@ -25,15 +25,15 @@ impl Model {
         &'s self,
         query: &'doc str,
         documents: &'doc [S],
-    ) -> Result<Vec<&'doc str>, RustBertError> {
+    ) -> Result<Vec<Option<&'doc str>>, RustBertError> {
         // Encode the query
         let query_encoding = self.encode(&[query])?;
 
         // Tokenize all the documents, with no length limit on each one
-        let tokenized = self.tokenizer.encode_list(
+        let tokenized_docs = self.tokenizer.encode_list(
             documents,
             // Don't truncate here since we're chunking below.
-            1_000_000_000,
+            1_000_000,
             &rust_tokenizers::tokenizer::TruncationStrategy::LongestFirst,
             0,
         );
@@ -43,29 +43,61 @@ impl Model {
         // i.e 0..10, 8..18, 16..26
         let chunk_index_inc = chunk_size - chunk_overlap;
 
-        let total_chunks = tokenized
+        let total_chunks = tokenized_docs
             .iter()
             .map(|t| t.token_ids.len() / chunk_index_inc + 1)
             .sum::<usize>();
         let mut token_chunks = Vec::with_capacity(total_chunks);
-        let mut token_chunk_ends = Vec::with_capacity(tokenized.len());
+        let mut token_chunk_boundaries = Vec::with_capacity(total_chunks);
+        let mut document_chunk_boundaries = Vec::with_capacity(tokenized_docs.len());
 
-        for tokens in tokenized.iter() {
+        for tokens in &tokenized_docs {
             // Make sure we add a chunk on short documents
-            let first = &tokens.token_ids[0..chunk_size.min(tokens.token_ids.len())];
-            token_chunks.push(first);
-
-            let mut i = chunk_index_inc;
+            let mut i = 0;
             while i + chunk_overlap < tokens.token_ids.len() {
                 let start_index = i;
                 let end_index = std::cmp::min(i + chunk_size, tokens.token_ids.len());
+                let special_tokens_mask = &tokens.special_tokens_mask[start_index..end_index];
 
-                let chunk = &tokens.token_ids[start_index..end_index];
-                token_chunks.push(chunk);
+                // Find the longest consecutive sequence of non-special tokens
+                let mut longest_start = 0;
+                let mut longest_length = 0;
+                let mut current_start = 0;
+                let mut current_length = 0;
+
+                for (index, &is_special) in special_tokens_mask.iter().enumerate() {
+                    if is_special == 0 {
+                        current_length += 1;
+                    } else {
+                        if current_length > longest_length {
+                            longest_start = current_start;
+                            longest_length = current_length;
+                        }
+
+                        current_start = index;
+                        current_length = 0;
+                    }
+                }
+
+                if current_length > longest_length {
+                    longest_start = current_start;
+                    longest_length = current_length;
+                }
+
+                let start_index = start_index + longest_start;
+                let end_index = std::cmp::min(start_index + longest_length, end_index);
+
+                if end_index - start_index >= chunk_size / 2 {
+                    let chunk = &tokens.token_ids[start_index..end_index];
+
+                    token_chunk_boundaries.push(start_index..end_index);
+                    token_chunks.push(chunk);
+                }
+
                 i += chunk_index_inc;
             }
 
-            token_chunk_ends.push(token_chunks.len());
+            document_chunk_boundaries.push(token_chunks.len());
         }
 
         let tensors = self.generate_token_tensors(&token_chunks);
@@ -76,30 +108,29 @@ impl Model {
 
         // Now we need to find the best chunk for each document.
         let mut highlights = Vec::with_capacity(documents.len());
-        for (index, &overall_chunk_end) in token_chunk_ends.iter().enumerate() {
+        for (index, &overall_chunk_end) in document_chunk_boundaries.iter().enumerate() {
             let overall_chunk_start = if index == 0 {
                 0
             } else {
-                token_chunk_ends[index - 1]
+                document_chunk_boundaries[index - 1]
             };
             let doc_scores = &scores[overall_chunk_start..overall_chunk_end];
-            let best_chunk_index = doc_scores
+            let Some(best_chunk_index) = doc_scores
                 .iter()
-                .position_max_by(|a, b| a.partial_cmp(b).unwrap())
-                .unwrap();
+                .position_max_by(|a, b| a.partial_cmp(b).unwrap()) else {
+                    highlights.push(None);
+                    continue;
+            };
 
-            // From the chunk index, calculate which tokens this corresponded to
-            let doc_best_chunk_start = best_chunk_index * chunk_index_inc;
+            let doc_best_chunk_range =
+                token_chunk_boundaries[overall_chunk_start + best_chunk_index].clone();
 
             // Now we have the indexes of the tokens where the best chunk
             // starts and ends, relative to the document itself, so we can
             // go back to the original tokenized input to figure out where
             // in the document these tokens occur.
-            let (text_start, text_end) = tokenized[index]
-                .token_offsets
+            let (text_start, text_end) = tokenized_docs[index].token_offsets[doc_best_chunk_range]
                 .iter()
-                .skip(doc_best_chunk_start)
-                .take(chunk_size)
                 .filter_map(|o| o.as_ref())
                 .fold((0, 0), |(begin, end), offset| {
                     if begin == 0 && end == 0 {
@@ -122,7 +153,7 @@ impl Model {
                 .map(|(start, end)| &doc[start..end])
                 .unwrap_or_default();
 
-            highlights.push(highlight);
+            highlights.push(Some(highlight));
         }
 
         Ok(highlights)

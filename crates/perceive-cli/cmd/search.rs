@@ -33,7 +33,7 @@ pub fn search(state: &mut AppState, args: SearchArgs) -> Result<()> {
 
     for (index, (result, item)) in results.iter().enumerate() {
         let desc = result.metadata.name.as_ref().unwrap_or(&result.external_id);
-        let highlight = highlights[index].replace('\n', "•");
+        let highlight = highlights[index].unwrap_or_default().replace('\n', "•");
         let source_name = state
             .sources
             .iter()
