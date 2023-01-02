@@ -22,6 +22,7 @@ pub enum SourceCommand {
     Add(AddSourceArgs),
     Edit(EditSourceArgs),
     RebuildSearch(RebuildSearchArgs),
+    Reprocess(ReprocessArgs),
     Scan(ScanSourceArgs),
 }
 
@@ -77,6 +78,12 @@ pub struct RebuildSearchArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct ReprocessArgs {
+    /// The name of the source
+    pub name: String,
+}
+
+#[derive(Debug, Args)]
 pub struct ScanSourceArgs {
     /// The name of the source
     pub name: String,
@@ -93,6 +100,7 @@ pub fn handle_source_command(state: &mut AppState, cmd: SourceArgs) -> eyre::Res
         SourceCommand::Add(args) => add_source(state, args),
         SourceCommand::Edit(args) => Err(eyre!("Not implemented yet")),
         SourceCommand::RebuildSearch(args) => rebuild_search(state, args),
+        SourceCommand::Reprocess(args) => reprocess_source(state, args),
         SourceCommand::Scan(args) => scan_source(state, args),
     }
 }
@@ -291,4 +299,8 @@ fn rebuild_search(state: &mut AppState, args: RebuildSearchArgs) -> Result<()> {
     );
 
     Ok(())
+}
+
+fn reprocess_source(state: &mut AppState, args: ReprocessArgs) -> Result<()> {
+    todo!("load the sources, reprocess each one, save it back again")
 }

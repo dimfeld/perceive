@@ -34,7 +34,7 @@ r2d2 = "0.8.10"
 r2d2_sqlite = "0.21.0"
 rayon = "1.6.1"
 # This fork handles IO errors properly
-readability = { git = "https://github.com/JBBgameich/readability", rev="c6c3d518592c7d8cfe014a82b5bcf68983b788fd", optional = true }
+readability = { path = "../../../readability", optional = true }
 reqwest = { version = "0.11.13", features = ["blocking", "gzip"], optional = true }
 rusqlite = { version = "0.28.0", features = ["bundled-full"] }
 rusqlite_migration = "1.0.1"

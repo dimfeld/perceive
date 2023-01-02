@@ -65,7 +65,7 @@ impl ChromiumHistoryScanner {
 }
 
 /// Increment this when the postprocessing pipeline changes.
-const PROCESS_VERSION: i32 = 0;
+const PROCESS_VERSION: i32 = 1;
 
 impl SourceScanner for ChromiumHistoryScanner {
     fn scan(&self, tx: CountingVecSender<Item>) -> Result<(), eyre::Report> {
@@ -311,7 +311,7 @@ impl SourceScanner for ChromiumHistoryScanner {
     }
 
     fn reprocess(&self, item: &mut Item) -> Result<SourceScannerReadResult, eyre::Report> {
-        if item.process_version == PROCESS_VERSION || item.raw_content.is_none() {
+        if item.process_version == PROCESS_VERSION {
             return Ok(SourceScannerReadResult::Unchanged);
         }
 
