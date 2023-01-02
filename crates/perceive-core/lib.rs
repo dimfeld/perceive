@@ -26,6 +26,11 @@ pub enum SkipReason {
     NotFound,
     FetchError,
     Unauthorized,
+    /// The item redirected to another place, and this source does
+    /// not follow redirects.  e.g. for browser history we will
+    /// also have an entry for the final destination or it means we
+    /// were redirected to a login page.
+    Redirected,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

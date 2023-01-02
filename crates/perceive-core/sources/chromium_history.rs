@@ -50,6 +50,7 @@ impl ChromiumHistoryScanner {
                 .user_agent("perceive-search")
                 .gzip(true)
                 .timeout(std::time::Duration::from_secs(30))
+                .redirect(reqwest::redirect::Policy::none())
                 .build()?,
         })
     }
@@ -230,15 +231,13 @@ impl SourceScanner for ChromiumHistoryScanner {
         };
 
         let status = response.status();
-        let mut skip_reason = match status {
-            StatusCode::NOT_FOUND => Some(SkipReason::NotFound),
-            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Some(SkipReason::Unauthorized),
+        let skip_reason = match status.as_u16() {
+            401 | 403 => Some(SkipReason::Unauthorized),
+            404 => Some(SkipReason::NotFound),
+            300..=399 => Some(SkipReason::Redirected),
+            400.. => Some(SkipReason::FetchError),
             _ => None,
         };
-
-        if skip_reason.is_none() && status.as_u16() >= 400 {
-            skip_reason = Some(SkipReason::FetchError);
-        }
 
         if skip_reason.is_some() {
             item.skipped = skip_reason;
