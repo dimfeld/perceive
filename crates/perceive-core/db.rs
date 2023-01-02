@@ -1,10 +1,12 @@
 use std::{ops::Deref, path::PathBuf, sync::Arc};
 
+use eyre::Result;
 use parking_lot::Mutex;
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 use thiserror::Error;
+use time::OffsetDateTime;
 
-use crate::paths::PROJECT_DIRS;
+use crate::{paths::PROJECT_DIRS, Item, ItemMetadata};
 
 #[derive(Debug, Error)]
 pub enum DbError {
@@ -85,6 +87,68 @@ impl DatabaseInner {
         conn.pragma_update(None, "synchronous", "normal")?;
 
         migrations.to_latest(conn)?;
+        Ok(())
+    }
+
+    pub fn read_item(&self, id: i64) -> Result<Option<Item>> {
+        let conn = self.read_pool.get()?;
+        let mut stmt = conn.prepare_cached(
+            r##"SELECT source_id,
+            external_id, hash, content, raw_content, process_version,
+            name, author, description,
+            modified, last_accessed, skipped
+            FROM items WHERE id=?"##,
+        )?;
+
+        let result = stmt
+            .query_and_then([id], |row| {
+                let compressed = row.get_ref(4)?.as_blob_or_null()?;
+                let raw_content = compressed.map(zstd::decode_all).transpose()?;
+
+                Ok::<_, eyre::Report>(Item {
+                    source_id: row.get(0)?,
+                    external_id: row.get(1)?,
+                    hash: row.get(2)?,
+                    content: row.get(3)?,
+                    raw_content,
+                    process_version: row.get(5)?,
+                    metadata: ItemMetadata {
+                        name: row.get(6)?,
+                        author: row.get(7)?,
+                        description: row.get(8)?,
+                        mtime: row
+                            .get::<_, Option<i64>>(9)?
+                            .map(OffsetDateTime::from_unix_timestamp)
+                            .transpose()?,
+                        atime: row
+                            .get::<_, Option<i64>>(10)?
+                            .map(OffsetDateTime::from_unix_timestamp)
+                            .transpose()?,
+                    },
+                    skipped: row
+                        .get_ref(11)?
+                        .as_str_or_null()?
+                        .map(|s| s.parse())
+                        .transpose()?,
+                })
+            })?
+            .into_iter()
+            .next()
+            .transpose()?;
+
+        Ok(result)
+    }
+
+    pub fn set_item_hidden(&self, id: i64, hidden: bool) -> Result<()> {
+        let conn = self.write_conn.lock();
+        let mut stmt = conn.prepare_cached("UPDATE items SET hidden_at=? WHERE id=?")?;
+
+        if hidden {
+            let now = OffsetDateTime::now_utc().unix_timestamp();
+            stmt.execute(params![now, id])?;
+        } else {
+            stmt.execute(params![None::<i64>, id])?;
+        }
         Ok(())
     }
 }

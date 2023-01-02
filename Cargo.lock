@@ -1787,6 +1787,7 @@ dependencies = [
  "tch",
  "thiserror",
  "time 0.3.17",
+ "zstd 0.12.1+zstd.1.5.2",
 ]
 
 [[package]]

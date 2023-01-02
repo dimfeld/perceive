@@ -40,7 +40,12 @@ pub fn search(state: &mut AppState, args: SearchArgs) -> Result<()> {
             .find(|s| s.id == result.source_id)
             .map(|s| s.name.as_str())
             .unwrap_or_default();
-        println!("{} - {} - {highlight}", source_name, desc.bold());
+        println!(
+            "{} {} - {} - {highlight}",
+            source_name,
+            item.id,
+            desc.bold()
+        );
     }
 
     Ok(())

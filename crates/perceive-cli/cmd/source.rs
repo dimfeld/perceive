@@ -1,7 +1,7 @@
 use std::{path::Path, sync::atomic::AtomicBool};
 
 use clap::{Args, Subcommand};
-use eyre::eyre;
+use eyre::{eyre, Result};
 use indicatif::ProgressBar;
 use perceive_core::sources::{
     db::update_source, import::ScanStats, ChromiumHistoryConfig, FsSourceConfig,
@@ -21,6 +21,7 @@ pub struct SourceArgs {
 pub enum SourceCommand {
     Add(AddSourceArgs),
     Edit(EditSourceArgs),
+    RebuildSearch(RebuildSearchArgs),
     Scan(ScanSourceArgs),
 }
 
@@ -70,6 +71,12 @@ pub struct EditSourceArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct RebuildSearchArgs {
+    /// The name of the source
+    pub name: String,
+}
+
+#[derive(Debug, Args)]
 pub struct ScanSourceArgs {
     /// The name of the source
     pub name: String,
@@ -85,6 +92,7 @@ pub fn handle_source_command(state: &mut AppState, cmd: SourceArgs) -> eyre::Res
     match cmd.command {
         SourceCommand::Add(args) => add_source(state, args),
         SourceCommand::Edit(args) => Err(eyre!("Not implemented yet")),
+        SourceCommand::RebuildSearch(args) => rebuild_search(state, args),
         SourceCommand::Scan(args) => scan_source(state, args),
     }
 }
@@ -254,8 +262,19 @@ fn scan_source(state: &mut AppState, args: ScanSourceArgs) -> eyre::Result<()> {
 
     println!("Finished in {} seconds", start_time.elapsed().as_secs());
 
+    rebuild_search(state, RebuildSearchArgs { name: args.name })
+}
+
+fn rebuild_search(state: &mut AppState, args: RebuildSearchArgs) -> Result<()> {
+    let source = state
+        .sources
+        .iter()
+        .find(|s| s.name == args.name)
+        .ok_or_else(|| eyre!("Source not found"))?;
+
     println!("Rebuilding search...");
     let progress = indicatif::MultiProgress::new();
+    let start_time = std::time::Instant::now();
 
     state.searcher.rebuild_source(
         &state.database,

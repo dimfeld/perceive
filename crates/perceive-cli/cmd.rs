@@ -1,10 +1,12 @@
 use clap::Subcommand;
 use eyre::{eyre, Result};
 
-use self::{model::ModelArgs, search::SearchArgs};
+use self::{hide::HideArgs, model::ModelArgs, print::PrintArgs, search::SearchArgs};
 use crate::AppState;
 
+pub mod hide;
 pub mod model;
+pub mod print;
 pub mod search;
 pub mod source;
 
@@ -18,6 +20,10 @@ pub enum Commands {
     Search(SearchArgs),
     /// Configure the model
     Model(ModelArgs),
+    /// Print the content for an item
+    Print(PrintArgs),
+    /// Hide an item from the search results
+    Hide(HideArgs),
 }
 
 pub fn handle_command(state: &mut AppState, cmd: Commands) -> Result<()> {
@@ -26,5 +32,7 @@ pub fn handle_command(state: &mut AppState, cmd: Commands) -> Result<()> {
         Commands::Search(args) => search::search(state, args),
         Commands::Source(args) => source::handle_source_command(state, args),
         Commands::Model(args) => model::handle_model_command(state, args),
+        Commands::Print(args) => print::handle_print_command(state, args),
+        Commands::Hide(args) => hide::handle_hide_command(state, args),
     }
 }
