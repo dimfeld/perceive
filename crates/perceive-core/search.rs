@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use ahash::HashSet;
 use indicatif::ProgressStyle;
 use rayon::prelude::*;
 use rusqlite::Connection;
@@ -28,6 +29,10 @@ struct SourceSearch {
 
 pub struct Searcher {
     sources: Vec<SourceSearch>,
+    /// The search structure is built only from non-hidden items, but this stores IDs of items
+    /// that were hidden after the search was built, to avoid needing to rebuild it after every single
+    /// hide operation.
+    pub hidden: HashSet<i64>,
 }
 
 impl Searcher {
@@ -48,7 +53,10 @@ impl Searcher {
 
         let sources = Self::build_sources(&conn, model_id, model_version, sources, progress)?;
 
-        Ok(Searcher { sources })
+        Ok(Searcher {
+            sources,
+            hidden: HashSet::default(),
+        })
     }
 
     pub fn rebuild_source(
@@ -166,6 +174,7 @@ impl Searcher {
                 source
                     .hnsw
                     .search(&search_point, &mut searcher)
+                    .filter(|item| !self.hidden.contains(item.value))
                     .take(num_results)
                     .map(|item| SearchItem {
                         id: *item.value,

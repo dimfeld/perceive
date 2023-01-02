@@ -14,5 +14,6 @@ pub struct HideArgs {
 
 pub fn handle_hide_command(state: &mut AppState, args: HideArgs) -> Result<()> {
     state.database.set_item_hidden(args.id, true)?;
+    state.searcher.hidden.insert(args.id);
     Ok(())
 }
