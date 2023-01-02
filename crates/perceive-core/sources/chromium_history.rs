@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use time::{macros::datetime, OffsetDateTime};
 
 use super::{
-    import::{CountingVecSender, SourceScanner, SourceScannerReadResult},
+    pipeline::{CountingVecSender, FoundItem, SourceScanner, SourceScannerReadResult},
     ItemCompareStrategy,
 };
 use crate::{Item, SkipReason};
@@ -181,7 +181,7 @@ impl SourceScanner for ChromiumHistoryScanner {
 
     fn read(
         &self,
-        existing: Option<&super::import::FoundItem>,
+        existing: Option<&FoundItem>,
         compare_strategy: ItemCompareStrategy,
         item: &mut Item,
     ) -> Result<SourceScannerReadResult, eyre::Report> {

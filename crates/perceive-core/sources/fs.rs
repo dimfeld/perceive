@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use super::{
-    import::{CountingVecSender, FoundItem, SourceScanner, SourceScannerReadResult},
+    pipeline::{CountingVecSender, FoundItem, SourceScanner, SourceScannerReadResult},
     ItemCompareStrategy,
 };
 use crate::{batch_sender::BatchSender, Item, ItemMetadata};
@@ -98,7 +98,7 @@ impl SourceScanner for FileScanner {
 
 fn process_content(content: &str, metadata: &mut ItemMetadata) -> Option<String> {
     let parser = gray_matter::Matter::<gray_matter::engine::YAML>::new();
-    let Some(parsed) = parser.parse_with_struct::<FileAttributes>(&content) else {
+    let Some(parsed) = parser.parse_with_struct::<FileAttributes>(content) else {
         return None;
     };
 

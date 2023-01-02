@@ -4,7 +4,7 @@ use clap::{Args, Subcommand};
 use eyre::{eyre, Result};
 use indicatif::ProgressBar;
 use perceive_core::sources::{
-    db::update_source, import::ScanStats, ChromiumHistoryConfig, FsSourceConfig,
+    db::update_source, pipeline::ScanStats, ChromiumHistoryConfig, FsSourceConfig,
     ItemCompareStrategy, Source, SourceConfig,
 };
 use time::OffsetDateTime;
@@ -241,7 +241,7 @@ fn scan_source(state: &mut AppState, args: ScanSourceArgs) -> eyre::Result<()> {
 
         // The model is Send but not Sync, so we transfer the entire thing into the scanner thread.
         let model = state.loan_model();
-        let returned_model = match perceive_core::sources::import::scan_source(
+        let returned_model = match perceive_core::sources::scan_source(
             &times,
             &state.database,
             model,
