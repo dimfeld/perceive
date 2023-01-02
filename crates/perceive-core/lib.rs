@@ -31,6 +31,19 @@ pub enum SkipReason {
     /// also have an entry for the final destination or it means we
     /// were redirected to a login page.
     Redirected,
+    NoContent,
+}
+
+impl SkipReason {
+    pub fn permanent(&self) -> bool {
+        match self {
+            SkipReason::NotFound => true,
+            SkipReason::FetchError => true,
+            SkipReason::Unauthorized => true,
+            SkipReason::Redirected => true,
+            SkipReason::NoContent => false,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

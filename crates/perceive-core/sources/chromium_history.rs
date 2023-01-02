@@ -187,9 +187,11 @@ impl SourceScanner for ChromiumHistoryScanner {
     ) -> Result<SourceScannerReadResult, eyre::Report> {
         if compare_strategy != ItemCompareStrategy::Force {
             if let Some(skipped) = existing.and_then(|e| e.skipped) {
-                // We skipped it last time, so continue skipping it.
-                item.skipped = Some(skipped);
-                return Ok(SourceScannerReadResult::Unchanged);
+                if skipped.permanent() {
+                    // We skipped it last time, so continue skipping it.
+                    item.skipped = Some(skipped);
+                    return Ok(SourceScannerReadResult::Unchanged);
+                }
             }
 
             let existing_atime = existing.and_then(|e| e.last_accessed);
@@ -231,23 +233,25 @@ impl SourceScanner for ChromiumHistoryScanner {
         };
 
         let status = response.status();
-        let skip_reason = match status.as_u16() {
-            401 | 403 => Some(SkipReason::Unauthorized),
-            404 => Some(SkipReason::NotFound),
-            300..=399 => Some(SkipReason::Redirected),
-            400.. => Some(SkipReason::FetchError),
+
+        let unchanged = matches!(status, StatusCode::NOT_MODIFIED);
+        if unchanged {
+            return Ok(SourceScannerReadResult::Unchanged);
+        }
+
+        let skip_reason = match status {
+            StatusCode::FORBIDDEN | StatusCode::UNAUTHORIZED => Some(SkipReason::Unauthorized),
+            StatusCode::NOT_FOUND => Some(SkipReason::NotFound),
+            // This is handled later, but we don't want it to fall in the redirect case.
+            StatusCode::NOT_MODIFIED => None,
+            s if s.is_redirection() => Some(SkipReason::Redirected),
+            s if s.is_client_error() || s.is_server_error() => Some(SkipReason::FetchError),
             _ => None,
         };
 
         if skip_reason.is_some() {
             item.skipped = skip_reason;
             return Ok(SourceScannerReadResult::Found);
-        }
-
-        let unchanged = matches!(response.status(), StatusCode::NOT_MODIFIED)
-            || response.content_length().map(|l| l == 0).unwrap_or(false);
-        if unchanged {
-            return Ok(SourceScannerReadResult::Unchanged);
         }
 
         let headers = response.headers();
@@ -278,8 +282,15 @@ impl SourceScanner for ChromiumHistoryScanner {
             return Ok(SourceScannerReadResult::Found);
         }
 
-        if content_type.starts_with("text/html") {
-            let raw_content = response.text()?;
+        let is_html = content_type.starts_with("text/html");
+
+        let raw_content = response.text()?;
+        if raw_content.is_empty() {
+            item.skipped = Some(SkipReason::NoContent);
+            return Ok(SourceScannerReadResult::Found);
+        }
+
+        if is_html {
             let url = Url::parse(&item.external_id)?;
 
             let (doc, raw_compressed) = rayon::join(
@@ -293,7 +304,7 @@ impl SourceScanner for ChromiumHistoryScanner {
             item.metadata.name = Some(doc.title);
             item.content = Some(doc.text);
         } else {
-            item.content = Some(response.text()?);
+            item.content = Some(raw_content);
         }
 
         Ok(SourceScannerReadResult::Found)
