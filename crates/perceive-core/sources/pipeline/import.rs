@@ -1,11 +1,13 @@
-use std::fmt::Display;
-
 use super::{
     calculate_embeddings::calculate_embeddings, match_existing_items::match_to_existing_items,
     read_items::read_items, update_db::update_db, CountingVecSender, ItemCompareStrategy,
     ScanStats, EMBEDDING_BATCH_SIZE,
 };
-use crate::{db::Database, model::Model, sources::Source};
+use crate::{
+    db::Database,
+    model::Model,
+    sources::{pipeline::log_thread_error, Source},
+};
 
 pub fn scan_source(
     times: &ScanStats,
@@ -98,23 +100,6 @@ pub fn scan_source(
                 with_embeddings_rx,
             )
         });
-
-        fn log_thread_error<T, E: Display>(
-            name: &str,
-            r: std::thread::Result<Result<T, E>>,
-        ) -> bool {
-            match r {
-                Err(e) => {
-                    eprintln!("Thread {name} panicked: {:?}", e);
-                    true
-                }
-                Ok(Err(e)) => {
-                    eprintln!("Thread {name} failed: {}", e);
-                    true
-                }
-                Ok(Ok(_)) => false,
-            }
-        }
 
         // TODO - handle errors better
         let mut errored = false;

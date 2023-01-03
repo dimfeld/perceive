@@ -61,19 +61,20 @@ pub fn update_db(
             )?;
 
             for (item, embedding) in &batch {
+                let found_item_id = item.item.id;
                 let item_id = match &item.state {
-                    ScanItemState::Unchanged { id } => {
+                    ScanItemState::Unchanged => {
                         unchanged_stmt.execute(params![
                             index_version,
                             item.item.metadata.atime.map(|t| t.unix_timestamp()),
-                            id
+                            found_item_id,
                         ])?;
                         unchanged += 1;
-                        *id
+                        found_item_id
                     }
-                    ScanItemState::Changed(found) => {
+                    ScanItemState::Found | ScanItemState::Changed => {
                         changed_stmt.execute(named_params! {
-                            ":id": found.id,
+                            ":id": found_item_id,
                             ":version": index_version,
                             ":hash": item.item.hash.as_deref().unwrap_or_default(),
                             ":content": item.item.content.as_deref().unwrap_or_default(),
@@ -88,7 +89,7 @@ pub fn update_db(
                         })?;
 
                         changed += 1;
-                        found.id
+                        found_item_id
                     }
                     ScanItemState::New => {
                         new_stmt.execute(named_params! {
@@ -112,7 +113,6 @@ pub fn update_db(
                         new += 1;
                         row_id
                     }
-                    ScanItemState::Found(_) => unreachable!(),
                 };
 
                 if let Some(embedding) = embedding {

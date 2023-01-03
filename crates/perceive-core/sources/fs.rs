@@ -77,6 +77,10 @@ impl SourceScanner for FileScanner {
         Ok(SourceScannerReadResult::Found)
     }
 
+    fn latest_process_version(&self) -> i32 {
+        0
+    }
+
     fn reprocess(&self, item: &mut Item) -> Result<SourceScannerReadResult, eyre::Report> {
         let content = match (item.raw_content.as_ref(), item.content.as_ref()) {
             (Some(buffer), _) => {
@@ -149,6 +153,7 @@ impl<'a> ignore::ParallelVisitor for FileVisitor<'a> {
 
             if is_match {
                 let item = Item {
+                    id: -1,
                     source_id: self.source_id,
                     external_id: entry.path().to_string_lossy().to_string(),
                     hash: None,

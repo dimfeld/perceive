@@ -50,10 +50,8 @@ pub(super) fn calculate_embeddings(
     let mut documents = Vec::with_capacity(EMBEDDING_BATCH_SIZE);
 
     for item in rx {
-        if matches!(
-            item.state,
-            ScanItemState::Unchanged { .. } | ScanItemState::Found(_)
-        ) || item.item.skipped.is_some()
+        if matches!(item.state, ScanItemState::Unchanged | ScanItemState::Found)
+            || item.item.skipped.is_some()
         {
             tx.send(smallvec![(item, None)])?;
             continue;

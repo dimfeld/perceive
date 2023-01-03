@@ -48,6 +48,7 @@ impl SkipReason {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Item {
+    pub id: i64,
     pub source_id: i64,
     /// The path, URL, etc. of the item
     pub external_id: String,

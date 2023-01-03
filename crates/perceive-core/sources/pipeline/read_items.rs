@@ -13,36 +13,27 @@ pub fn read_items(
     for item in rx {
         let _track = stats.read_time.begin();
 
-        let ScanItem { mut item, state } = item;
+        if matches!(item.state, ScanItemState::Unchanged) {
+            tx.send(item)?;
+            continue;
+        }
 
-        let existing = match &state {
-            ScanItemState::New => None,
-            ScanItemState::Found(found) => Some(found),
-            ScanItemState::Changed(found) => Some(found),
-            ScanItemState::Unchanged { .. } => {
-                tx.send(ScanItem { item, state })?;
-                continue;
-            }
-        };
+        let ScanItem {
+            mut item,
+            existing,
+            state,
+        } = item;
 
         let external_id = item.external_id.clone();
 
         stats.reading.fetch_add(1, Ordering::Relaxed);
-        let read_result = scanner.read(existing, compare_strategy, &mut item);
+        let read_result = scanner.read(existing.as_ref(), compare_strategy, &mut item);
         stats.reading.fetch_sub(1, Ordering::Relaxed);
         stats.fetched.fetch_add(1, Ordering::Relaxed);
 
         let state = match read_result {
             Ok(SourceScannerReadResult::Found) => state,
-            Ok(SourceScannerReadResult::Unchanged) => {
-                if let Some(id) = state.item_id() {
-                    ScanItemState::Unchanged { id }
-                } else {
-                    // The scanner said the item was unchanged, but we also don't have an
-                    // existing one. Just skip it.
-                    continue;
-                }
-            }
+            Ok(SourceScannerReadResult::Unchanged) => ScanItemState::Unchanged,
             Ok(SourceScannerReadResult::Omit) => {
                 continue;
             }
@@ -54,20 +45,25 @@ pub fn read_items(
         };
 
         let compare_content = item.skipped.is_none() && compare_strategy.should_compare_content();
-        let state = match state {
-            ScanItemState::New | ScanItemState::Unchanged { .. } | ScanItemState::Changed(_) => {
-                state
-            }
-            ScanItemState::Found(found) => {
-                if compare_content && found.content != item.content.as_deref().unwrap_or_default() {
-                    ScanItemState::Changed(found)
+        let state = match (state, existing.as_ref()) {
+            (ScanItemState::New | ScanItemState::Unchanged | ScanItemState::Changed, _) => state,
+            (ScanItemState::Found, None) => ScanItemState::New,
+            (ScanItemState::Found, Some(existing)) => {
+                if compare_content
+                    && existing.content != item.content.as_deref().unwrap_or_default()
+                {
+                    ScanItemState::Changed
                 } else {
-                    ScanItemState::Unchanged { id: found.id }
+                    ScanItemState::Unchanged
                 }
             }
         };
 
-        tx.send(ScanItem { state, item })?;
+        tx.send(ScanItem {
+            state,
+            existing,
+            item,
+        })?;
     }
 
     Ok(())

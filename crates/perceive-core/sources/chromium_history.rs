@@ -158,6 +158,7 @@ impl SourceScanner for ChromiumHistoryScanner {
             let batch = batch
                 .into_iter()
                 .map(|(url_str, title, last_visit_time)| Item {
+                    id: -1,
                     source_id: self.source_id,
                     external_id: url_str,
                     hash: None,
@@ -308,6 +309,10 @@ impl SourceScanner for ChromiumHistoryScanner {
         }
 
         Ok(SourceScannerReadResult::Found)
+    }
+
+    fn latest_process_version(&self) -> i32 {
+        PROCESS_VERSION
     }
 
     fn reprocess(&self, item: &mut Item) -> Result<SourceScannerReadResult, eyre::Report> {

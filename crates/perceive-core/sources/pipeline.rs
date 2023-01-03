@@ -1,4 +1,7 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    fmt::Display,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use smallvec::SmallVec;
 
@@ -8,6 +11,7 @@ mod calculate_embeddings;
 mod import;
 mod match_existing_items;
 mod read_items;
+pub mod reprocess;
 mod update_db;
 
 pub use import::scan_source;
@@ -40,6 +44,8 @@ pub trait SourceScanner: Send + Sync {
         item: &mut Item,
     ) -> Result<SourceScannerReadResult, eyre::Report>;
 
+    fn latest_process_version(&self) -> i32;
+
     /// For pipelines that do some postprocessing on the data, reprocess that data.
     #[allow(unused_variables)]
     fn reprocess(&self, item: &mut Item) -> Result<SourceScannerReadResult, eyre::Report> {
@@ -51,27 +57,17 @@ enum ScanItemState {
     /// We're seeing this item for the first time.
     New,
     /// This item has not changed since the last index.
-    Unchanged { id: i64 },
+    Unchanged,
     /// The item exists, and we haven't determined yet if it changed or not.
-    Found(FoundItem),
+    Found,
     /// The item exists, and it has changed since last time.
     /// Effectively this means that it will be reencoded.
-    Changed(FoundItem),
-}
-
-impl ScanItemState {
-    fn item_id(&self) -> Option<i64> {
-        match self {
-            ScanItemState::New => None,
-            ScanItemState::Unchanged { id } => Some(*id),
-            ScanItemState::Found(item) => Some(item.id),
-            ScanItemState::Changed(item) => Some(item.id),
-        }
-    }
+    Changed,
 }
 
 pub struct ScanItem {
     state: ScanItemState,
+    existing: Option<FoundItem>,
     item: Item,
 }
 
@@ -79,7 +75,6 @@ pub const EMBEDDING_BATCH_SIZE: usize = 64;
 pub type EmbeddingsOutput = SmallVec<[(ScanItem, Option<Vec<f32>>); 1]>;
 
 pub struct FoundItem {
-    pub id: i64,
     pub hash: String,
     pub content: String,
     pub modified: Option<i64>,
@@ -111,6 +106,12 @@ pub struct CountingVecSender<'a, T> {
     pub(crate) count: &'a AtomicU64,
 }
 
+impl<'a, T> CountingVecSender<'a, T> {
+    pub fn new(count: &AtomicU64, tx: flume::Sender<Vec<T>>) -> Self {
+        Self { tx, count }
+    }
+}
+
 impl<'a, T> Clone for CountingVecSender<'a, T> {
     fn clone(&self) -> Self {
         Self {
@@ -124,5 +125,22 @@ impl<'a, T> CountingVecSender<'a, T> {
     pub fn send(&self, batch: Vec<T>) -> Result<(), flume::SendError<Vec<T>>> {
         self.count.fetch_add(batch.len() as u64, Ordering::Relaxed);
         self.tx.send(batch)
+    }
+}
+
+pub(self) fn log_thread_error<T, E: Display>(
+    name: &str,
+    r: std::thread::Result<Result<T, E>>,
+) -> bool {
+    match r {
+        Err(e) => {
+            eprintln!("Thread {name} panicked: {:?}", e);
+            true
+        }
+        Ok(Err(e)) => {
+            eprintln!("Thread {name} failed: {}", e);
+            true
+        }
+        Ok(Ok(_)) => false,
     }
 }
