@@ -33,8 +33,7 @@ parking_lot = "0.12.1"
 r2d2 = "0.8.10"
 r2d2_sqlite = "0.21.0"
 rayon = "1.6.1"
-# This fork handles IO errors properly
-readability = { git = "https://github.com/JBBgameich/readability", rev="c6c3d518592c7d8cfe014a82b5bcf68983b788fd", optional = true }
+readability = { git="https://github.com/dimfeld/readability", optional = true }
 reqwest = { version = "0.11.13", features = ["blocking", "gzip"], optional = true }
 rusqlite = { version = "0.28.0", features = ["bundled-full"] }
 rusqlite_migration = "1.0.1"
@@ -51,6 +50,7 @@ thiserror = "1.0.38"
 time = { version = "0.3.17", features = ["serde"] }
 tracing = "0.1.37"
 zstd = "0.12.1"
+const_format = { version = "0.2.30", features = ["rust_1_64"] }
 
 [features]
 default = ["browser-history"]

@@ -42,7 +42,12 @@ pub fn handle_print_command(state: &mut AppState, args: PrintArgs) -> Result<()>
     }
 
     if args.raw {
-        let raw_content = item.raw_content.map(String::from_utf8);
+        let raw_content = item.raw_content.map(|compressed| {
+            let buf = zstd::decode_all(compressed.as_slice())?;
+            let s = String::from_utf8(buf)?;
+            Ok::<_, eyre::Report>(s)
+        });
+
         if let Some(Ok(raw_content)) = raw_content {
             println!("\nRaw content:\n{raw_content}");
         }

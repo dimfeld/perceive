@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use time::{macros::datetime, OffsetDateTime};
 
 use super::{
-    import::{CountingVecSender, SourceScanner, SourceScannerReadResult},
+    pipeline::{CountingVecSender, FoundItem, SourceScanner, SourceScannerReadResult},
     ItemCompareStrategy,
 };
 use crate::{Item, SkipReason};
@@ -65,7 +65,7 @@ impl ChromiumHistoryScanner {
 }
 
 /// Increment this when the postprocessing pipeline changes.
-const PROCESS_VERSION: i32 = 0;
+const PROCESS_VERSION: i32 = 1;
 
 impl SourceScanner for ChromiumHistoryScanner {
     fn scan(&self, tx: CountingVecSender<Item>) -> Result<(), eyre::Report> {
@@ -158,6 +158,7 @@ impl SourceScanner for ChromiumHistoryScanner {
             let batch = batch
                 .into_iter()
                 .map(|(url_str, title, last_visit_time)| Item {
+                    id: -1,
                     source_id: self.source_id,
                     external_id: url_str,
                     hash: None,
@@ -181,7 +182,7 @@ impl SourceScanner for ChromiumHistoryScanner {
 
     fn read(
         &self,
-        existing: Option<&super::import::FoundItem>,
+        existing: Option<&FoundItem>,
         compare_strategy: ItemCompareStrategy,
         item: &mut Item,
     ) -> Result<SourceScannerReadResult, eyre::Report> {
@@ -307,22 +308,47 @@ impl SourceScanner for ChromiumHistoryScanner {
             item.content = Some(raw_content);
         }
 
+        item.process_version = PROCESS_VERSION;
+
         Ok(SourceScannerReadResult::Found)
     }
 
+    fn latest_process_version(&self) -> i32 {
+        PROCESS_VERSION
+    }
+
     fn reprocess(&self, item: &mut Item) -> Result<SourceScannerReadResult, eyre::Report> {
-        if item.process_version == PROCESS_VERSION || item.raw_content.is_none() {
-            return Ok(SourceScannerReadResult::Unchanged);
-        }
+        // if item.process_version == PROCESS_VERSION {
+        //     return Ok(SourceScannerReadResult::Unchanged);
+        // }
 
         let Some(raw_content) = item.raw_content.as_ref() else {
             return Ok(SourceScannerReadResult::Unchanged);
         };
 
-        let raw_content = zstd::decode_all(raw_content.as_slice())?;
+        let raw_content = zstd::decode_all(raw_content.as_slice())
+            .wrap_err_with(|| format!("{} - decompressing content", item.external_id))?;
         let url = Url::parse(&item.external_id)?;
-        let doc = Self::extract_html_article(&url, &raw_content)?;
+        let doc = Self::extract_html_article(&url, &raw_content)
+            .wrap_err_with(|| format!("{} - extracting content", item.external_id))?;
 
+        let changed = item
+            .metadata
+            .name
+            .as_ref()
+            .map(|n| n != &doc.title)
+            .unwrap_or(true)
+            || item
+                .content
+                .as_ref()
+                .map(|c| c != &doc.text)
+                .unwrap_or(true);
+
+        if !changed {
+            return Ok(SourceScannerReadResult::Unchanged);
+        }
+
+        item.process_version = PROCESS_VERSION;
         item.metadata.name = Some(doc.title);
         item.content = Some(doc.text);
 

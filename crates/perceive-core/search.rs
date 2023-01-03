@@ -210,33 +210,31 @@ impl Searcher {
 
         let mut rows = stmt
             .query_map([Rc::new(values)], |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    Item {
-                        source_id: row.get(1)?,
-                        external_id: row.get(2)?,
-                        content: row.get(3)?,
-                        raw_content: None,
-                        hash: None,
-                        skipped: None,
-                        process_version: 0,
-                        metadata: ItemMetadata {
-                            name: row.get(4)?,
-                            author: row.get(5)?,
-                            description: row.get(6)?,
-                            mtime: row
-                                .get::<_, Option<i64>>(7)?
-                                .map(|t| OffsetDateTime::from_unix_timestamp(t).unwrap()),
-                            atime: row
-                                .get::<_, Option<i64>>(8)?
-                                .map(|t| OffsetDateTime::from_unix_timestamp(t).unwrap()),
-                        },
+                Ok(Item {
+                    id: row.get(0)?,
+                    source_id: row.get(1)?,
+                    external_id: row.get(2)?,
+                    content: row.get(3)?,
+                    raw_content: None,
+                    hash: None,
+                    skipped: None,
+                    process_version: 0,
+                    metadata: ItemMetadata {
+                        name: row.get(4)?,
+                        author: row.get(5)?,
+                        description: row.get(6)?,
+                        mtime: row
+                            .get::<_, Option<i64>>(7)?
+                            .map(|t| OffsetDateTime::from_unix_timestamp(t).unwrap()),
+                        atime: row
+                            .get::<_, Option<i64>>(8)?
+                            .map(|t| OffsetDateTime::from_unix_timestamp(t).unwrap()),
                     },
-                ))
+                })
             })?
             .map(|row| {
-                let (id, item) = row?;
-                let result = items.iter().find(|i| i.id == id).copied().unwrap();
+                let item = row?;
+                let result = items.iter().find(|i| i.id == item.id).copied().unwrap();
                 Ok::<_, DbError>((item, result))
             })
             .collect::<Result<Vec<_>, DbError>>()?;

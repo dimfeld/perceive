@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use super::{
-    import::{CountingVecSender, FoundItem, SourceScanner, SourceScannerReadResult},
+    pipeline::{CountingVecSender, FoundItem, SourceScanner, SourceScannerReadResult},
     ItemCompareStrategy,
 };
 use crate::{batch_sender::BatchSender, Item, ItemMetadata};
@@ -77,6 +77,10 @@ impl SourceScanner for FileScanner {
         Ok(SourceScannerReadResult::Found)
     }
 
+    fn latest_process_version(&self) -> i32 {
+        0
+    }
+
     fn reprocess(&self, item: &mut Item) -> Result<SourceScannerReadResult, eyre::Report> {
         let content = match (item.raw_content.as_ref(), item.content.as_ref()) {
             (Some(buffer), _) => {
@@ -98,7 +102,7 @@ impl SourceScanner for FileScanner {
 
 fn process_content(content: &str, metadata: &mut ItemMetadata) -> Option<String> {
     let parser = gray_matter::Matter::<gray_matter::engine::YAML>::new();
-    let Some(parsed) = parser.parse_with_struct::<FileAttributes>(&content) else {
+    let Some(parsed) = parser.parse_with_struct::<FileAttributes>(content) else {
         return None;
     };
 
@@ -149,6 +153,7 @@ impl<'a> ignore::ParallelVisitor for FileVisitor<'a> {
 
             if is_match {
                 let item = Item {
+                    id: -1,
                     source_id: self.source_id,
                     external_id: entry.path().to_string_lossy().to_string(),
                     hash: None,

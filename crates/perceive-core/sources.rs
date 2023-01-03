@@ -1,17 +1,18 @@
 #[cfg(feature = "browser-history")]
-pub mod chromium_history;
+mod chromium_history;
 pub mod db;
 mod fs;
-pub mod import;
+pub mod pipeline;
 
 pub use fs::FsSourceConfig;
+pub use pipeline::scan_source;
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString};
 use time::OffsetDateTime;
 
 #[cfg(feature = "browser-history")]
 pub use self::chromium_history::ChromiumHistoryConfig;
-use self::import::SourceScanner;
+use self::pipeline::SourceScanner;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]

@@ -3,7 +3,7 @@ use std::{fmt::Debug, ops::Deref, sync::Arc};
 use crossbeam::queue::SegQueue;
 use parking_lot::Mutex;
 
-use crate::sources::import::CountingVecSender;
+use crate::sources::pipeline::CountingVecSender;
 
 #[derive(Debug)]
 pub struct BatchSender<'a, T: Send + Sync>(Arc<BatchSenderInner<'a, T>>);

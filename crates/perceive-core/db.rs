@@ -1,5 +1,6 @@
 use std::{ops::Deref, path::PathBuf, sync::Arc};
 
+use const_format::concatcp;
 use eyre::Result;
 use parking_lot::Mutex;
 use rusqlite::{params, Connection};
@@ -92,46 +93,14 @@ impl DatabaseInner {
 
     pub fn read_item(&self, id: i64) -> Result<Option<Item>> {
         let conn = self.read_pool.get()?;
-        let mut stmt = conn.prepare_cached(
-            r##"SELECT source_id,
-            external_id, hash, content, raw_content, process_version,
-            name, author, description,
-            modified, last_accessed, skipped
-            FROM items WHERE id=?"##,
-        )?;
+        let mut stmt = conn.prepare_cached(concatcp!(
+            "SELECT ",
+            ITEM_COLUMNS,
+            " FROM items WHERE id = ?"
+        ))?;
 
         let result = stmt
-            .query_and_then([id], |row| {
-                let compressed = row.get_ref(4)?.as_blob_or_null()?;
-                let raw_content = compressed.map(zstd::decode_all).transpose()?;
-
-                Ok::<_, eyre::Report>(Item {
-                    source_id: row.get(0)?,
-                    external_id: row.get(1)?,
-                    hash: row.get(2)?,
-                    content: row.get(3)?,
-                    raw_content,
-                    process_version: row.get(5)?,
-                    metadata: ItemMetadata {
-                        name: row.get(6)?,
-                        author: row.get(7)?,
-                        description: row.get(8)?,
-                        mtime: row
-                            .get::<_, Option<i64>>(9)?
-                            .map(OffsetDateTime::from_unix_timestamp)
-                            .transpose()?,
-                        atime: row
-                            .get::<_, Option<i64>>(10)?
-                            .map(OffsetDateTime::from_unix_timestamp)
-                            .transpose()?,
-                    },
-                    skipped: row
-                        .get_ref(11)?
-                        .as_str_or_null()?
-                        .map(|s| s.parse())
-                        .transpose()?,
-                })
-            })?
+            .query_and_then([id], deserialize_item_row)?
             .into_iter()
             .next()
             .transpose()?;
@@ -151,4 +120,42 @@ impl DatabaseInner {
         }
         Ok(())
     }
+}
+
+/// The standard set of columns in the Item table. Use with [deserialize_item_row]
+/// for easy item reading.
+pub const ITEM_COLUMNS: &str = r##"id, source_id,
+            external_id, hash, content, raw_content, process_version,
+            name, author, description,
+            modified, last_accessed, skipped"##;
+
+/// Deserialize a row selected by `ITEM_COLUMNS` into an `Item`.
+pub fn deserialize_item_row(row: &rusqlite::Row) -> Result<Item> {
+    Ok(Item {
+        id: row.get(0)?,
+        source_id: row.get(1)?,
+        external_id: row.get(2)?,
+        hash: row.get(3)?,
+        content: row.get(4)?,
+        raw_content: row.get(5)?,
+        process_version: row.get(6)?,
+        metadata: ItemMetadata {
+            name: row.get(7)?,
+            author: row.get(8)?,
+            description: row.get(9)?,
+            mtime: row
+                .get::<_, Option<i64>>(10)?
+                .map(OffsetDateTime::from_unix_timestamp)
+                .transpose()?,
+            atime: row
+                .get::<_, Option<i64>>(11)?
+                .map(OffsetDateTime::from_unix_timestamp)
+                .transpose()?,
+        },
+        skipped: row
+            .get_ref(12)?
+            .as_str_or_null()?
+            .map(|s| s.parse())
+            .transpose()?,
+    })
 }
