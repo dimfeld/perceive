@@ -308,6 +308,8 @@ impl SourceScanner for ChromiumHistoryScanner {
             item.content = Some(raw_content);
         }
 
+        item.process_version = PROCESS_VERSION;
+
         Ok(SourceScannerReadResult::Found)
     }
 
@@ -316,18 +318,37 @@ impl SourceScanner for ChromiumHistoryScanner {
     }
 
     fn reprocess(&self, item: &mut Item) -> Result<SourceScannerReadResult, eyre::Report> {
-        if item.process_version == PROCESS_VERSION {
-            return Ok(SourceScannerReadResult::Unchanged);
-        }
+        // if item.process_version == PROCESS_VERSION {
+        //     return Ok(SourceScannerReadResult::Unchanged);
+        // }
 
         let Some(raw_content) = item.raw_content.as_ref() else {
             return Ok(SourceScannerReadResult::Unchanged);
         };
 
-        let raw_content = zstd::decode_all(raw_content.as_slice())?;
+        let raw_content = zstd::decode_all(raw_content.as_slice())
+            .wrap_err_with(|| format!("{} - decompressing content", item.external_id))?;
         let url = Url::parse(&item.external_id)?;
-        let doc = Self::extract_html_article(&url, &raw_content)?;
+        let doc = Self::extract_html_article(&url, &raw_content)
+            .wrap_err_with(|| format!("{} - extracting content", item.external_id))?;
 
+        let changed = item
+            .metadata
+            .name
+            .as_ref()
+            .map(|n| n != &doc.title)
+            .unwrap_or(true)
+            || item
+                .content
+                .as_ref()
+                .map(|c| c != &doc.text)
+                .unwrap_or(true);
+
+        if !changed {
+            return Ok(SourceScannerReadResult::Unchanged);
+        }
+
+        item.process_version = PROCESS_VERSION;
         item.metadata.name = Some(doc.title);
         item.content = Some(doc.text);
 

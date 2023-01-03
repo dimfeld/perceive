@@ -33,8 +33,7 @@ parking_lot = "0.12.1"
 r2d2 = "0.8.10"
 r2d2_sqlite = "0.21.0"
 rayon = "1.6.1"
-# This fork handles IO errors properly
-readability = { path = "../../../readability", optional = true }
+readability = { git="https://github.com/dimfeld/readability", optional = true }
 reqwest = { version = "0.11.13", features = ["blocking", "gzip"], optional = true }
 rusqlite = { version = "0.28.0", features = ["bundled-full"] }
 rusqlite_migration = "1.0.1"

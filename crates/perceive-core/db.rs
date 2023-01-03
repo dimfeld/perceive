@@ -131,16 +131,13 @@ pub const ITEM_COLUMNS: &str = r##"id, source_id,
 
 /// Deserialize a row selected by `ITEM_COLUMNS` into an `Item`.
 pub fn deserialize_item_row(row: &rusqlite::Row) -> Result<Item> {
-    let compressed = row.get_ref(5)?.as_blob_or_null()?;
-    let raw_content = compressed.map(zstd::decode_all).transpose()?;
-
     Ok(Item {
         id: row.get(0)?,
         source_id: row.get(1)?,
         external_id: row.get(2)?,
         hash: row.get(3)?,
         content: row.get(4)?,
-        raw_content,
+        raw_content: row.get(5)?,
         process_version: row.get(6)?,
         metadata: ItemMetadata {
             name: row.get(7)?,

@@ -1,11 +1,13 @@
+use std::sync::atomic::Ordering;
+
 use const_format::concatcp;
 use eyre::{Report, Result};
 use itertools::Itertools;
 use rayon::prelude::*;
 
 use super::{
-    calculate_embeddings::calculate_embeddings, log_thread_error, update_db::update_db, ScanItem,
-    ScanItemState, ScanStats, SourceScannerReadResult, EMBEDDING_BATCH_SIZE,
+    calculate_embeddings::calculate_embeddings, log_thread_error, update_db::update_db,
+    wrap_thread, ScanItem, ScanItemState, ScanStats, SourceScannerReadResult, EMBEDDING_BATCH_SIZE,
 };
 use crate::{
     db::{deserialize_item_row, Database, ITEM_COLUMNS},
@@ -15,9 +17,9 @@ use crate::{
 };
 
 fn read_rows(
+    times: &ScanStats,
     database: &Database,
     source: &Source,
-    process_version: i32,
     tx: flume::Sender<Vec<Item>>,
 ) -> Result<()> {
     let conn = database.read_pool.get()?;
@@ -25,17 +27,52 @@ fn read_rows(
     let mut stmt = conn.prepare_cached(concatcp!(
         "SELECT ",
         ITEM_COLUMNS,
-        " FROM items WHERE source_id = ? AND process_version < ?"
+        " FROM items WHERE source_id = ? and skipped is null"
     ))?;
 
-    let rows = stmt.query_and_then([source.id, process_version as i64], deserialize_item_row)?;
+    let rows = stmt.query_and_then([source.id], deserialize_item_row)?;
 
     for batch in &rows.into_iter().chunks(EMBEDDING_BATCH_SIZE) {
         let batch = batch.into_iter().collect::<Result<Vec<_>>>()?;
+        times
+            .scanned
+            .fetch_add(batch.len() as u64, Ordering::Relaxed);
         tx.send(batch)?;
     }
 
     Ok(())
+}
+
+fn reprocess(
+    times: &ScanStats,
+    source: &Source,
+    db_items_rx: flume::Receiver<Vec<Item>>,
+    processed_tx: flume::Sender<ScanItem>,
+) -> Result<()> {
+    let scanner = source.create_scanner()?;
+
+    for batch in db_items_rx {
+        batch.into_par_iter().try_for_each(|mut item| {
+            times
+                .reading
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let result = scanner.reprocess(&mut item)?;
+            if matches!(result, SourceScannerReadResult::Found) {
+                times
+                    .fetched
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                processed_tx.send(ScanItem {
+                    state: ScanItemState::Changed,
+                    existing: None,
+                    item,
+                })?;
+            }
+
+            Ok::<_, Report>(())
+        })?;
+    }
+
+    Ok::<_, Report>(())
 }
 
 pub fn reprocess_source(
@@ -46,42 +83,26 @@ pub fn reprocess_source(
     model_version: u32,
     source: &Source,
 ) -> Result<Model, (Model, eyre::Report)> {
-    let scanner = match source.create_scanner() {
-        Ok(scanner) => scanner,
-        Err(e) => {
-            return Err((model, e));
-        }
-    };
-    let process_version = scanner.latest_process_version();
-
-    let (db_items_tx, db_items_rx) = flume::unbounded();
-    let (processed_tx, processed_rx) = flume::bounded(EMBEDDING_BATCH_SIZE);
-    let (with_embeddings_tx, with_embeddings_rx) = flume::bounded(8);
-
     let returned_model = std::thread::scope(|scope| {
-        let read_task = scope.spawn(|| read_rows(database, source, process_version, db_items_tx));
+        let (db_items_tx, db_items_rx) = flume::unbounded();
+        let (processed_tx, processed_rx) = flume::bounded(EMBEDDING_BATCH_SIZE);
+        let (with_embeddings_tx, with_embeddings_rx) = flume::bounded(8);
 
-        let process_task = scope.spawn(|| {
-            for batch in db_items_rx {
-                batch.into_par_iter().try_for_each(|mut item| {
-                    let result = scanner.reprocess(&mut item)?;
-                    if matches!(result, SourceScannerReadResult::Found) {
-                        processed_tx.send(ScanItem {
-                            state: ScanItemState::Changed,
-                            existing: None,
-                            item,
-                        })?;
-                    }
+        let read_task = scope
+            .spawn(|| wrap_thread("read_rows", read_rows(times, database, source, db_items_tx)));
 
-                    Ok::<_, Report>(())
-                })?;
-            }
-
-            Ok::<_, Report>(())
+        let process_task = scope.spawn(move || {
+            wrap_thread(
+                "reprocess",
+                reprocess(times, source, db_items_rx, processed_tx),
+            )
         });
 
         let embed_task = scope.spawn(move || {
-            let result = calculate_embeddings(times, &model, processed_rx, with_embeddings_tx);
+            let result = wrap_thread(
+                "embedder",
+                calculate_embeddings(times, &model, processed_rx, with_embeddings_tx),
+            );
             match result {
                 Ok(()) => Ok(model),
                 Err(e) => Err((model, e)),
@@ -89,13 +110,16 @@ pub fn reprocess_source(
         });
 
         let write_db_task = scope.spawn(|| {
-            update_db(
-                model_id,
-                model_version,
-                times,
-                database,
-                source.index_version,
-                with_embeddings_rx,
+            wrap_thread(
+                "update_db",
+                update_db(
+                    model_id,
+                    model_version,
+                    times,
+                    database,
+                    source.index_version,
+                    with_embeddings_rx,
+                ),
             )
         });
 

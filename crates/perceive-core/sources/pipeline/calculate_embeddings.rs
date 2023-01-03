@@ -22,7 +22,9 @@ fn calculate_embeddings_batch(
     // the index job since it indicates some larger problem, but we also might need
     // to reset the model or something (though it seems that Torch just panics
     // in those cases).
-    let embeddings: Vec<Vec<f32>> = model.encode(documents).unwrap().into();
+    eprintln!("start encode");
+    let embeddings: Vec<Vec<f32>> = model.encode(documents)?.into();
+    eprintln!("end encode");
 
     stats
         .embedding
@@ -56,9 +58,6 @@ pub(super) fn calculate_embeddings(
             tx.send(smallvec![(item, None)])?;
             continue;
         }
-
-        // We could `std::mem::replace` the batch vector with a new one, but instead
-        // we `drain` at the end of the operations.
 
         let document =
             if item.item.metadata.name.is_none() && item.item.metadata.description.is_none() {

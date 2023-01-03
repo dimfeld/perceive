@@ -15,6 +15,7 @@ pub mod reprocess;
 mod update_db;
 
 pub use import::scan_source;
+pub use reprocess::reprocess_source;
 
 use super::ItemCompareStrategy;
 
@@ -53,6 +54,7 @@ pub trait SourceScanner: Send + Sync {
     }
 }
 
+#[derive(Debug, Copy, Clone)]
 enum ScanItemState {
     /// We're seeing this item for the first time.
     New,
@@ -107,7 +109,7 @@ pub struct CountingVecSender<'a, T> {
 }
 
 impl<'a, T> CountingVecSender<'a, T> {
-    pub fn new(count: &AtomicU64, tx: flume::Sender<Vec<T>>) -> Self {
+    pub fn new(count: &'a AtomicU64, tx: flume::Sender<Vec<T>>) -> Self {
         Self { tx, count }
     }
 }
@@ -125,6 +127,16 @@ impl<'a, T> CountingVecSender<'a, T> {
     pub fn send(&self, batch: Vec<T>) -> Result<(), flume::SendError<Vec<T>>> {
         self.count.fetch_add(batch.len() as u64, Ordering::Relaxed);
         self.tx.send(batch)
+    }
+}
+
+pub(self) fn wrap_thread<T, E: Display>(name: &str, r: Result<T, E>) -> Result<T, E> {
+    match r {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            eprintln!("{name} error: {e}");
+            Err(e)
+        }
     }
 }
 

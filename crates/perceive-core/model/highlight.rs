@@ -103,8 +103,13 @@ impl Model {
         let tensors = self.generate_token_tensors(&token_chunks);
 
         // Get the scores for all the chunks across all the documents.
-        let docs_encoding = self.encode_tokens(&tensors)?;
-        let scores: Vec<f32> = dot_product(&query_encoding, &docs_encoding).into();
+        let scores = if tensors.tokens_ids.is_empty() {
+            Vec::new()
+        } else {
+            let docs_encoding = self.encode_tokens(&tensors)?;
+            let scores: Vec<f32> = dot_product(&query_encoding, &docs_encoding).into();
+            scores
+        };
 
         // Now we need to find the best chunk for each document.
         let mut highlights = Vec::with_capacity(documents.len());
