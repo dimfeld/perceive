@@ -162,13 +162,20 @@ impl Searcher {
         Ok(source_search)
     }
 
-    pub fn search(&self, model: &Model, num_results: usize, query: &str) -> Vec<SearchItem> {
+    pub fn search(
+        &self,
+        model: &Model,
+        sources: &[i64],
+        num_results: usize,
+        query: &str,
+    ) -> Vec<SearchItem> {
         let term_embedding: Vec<f32> = Vec::from(model.encode(&[query]).unwrap()).pop().unwrap();
         let search_point = Point::from(term_embedding);
 
         let mut results = self
             .sources
             .par_iter()
+            .filter(|source| sources.contains(&source.id))
             .flat_map_iter(|source| {
                 let mut searcher = instant_distance::Search::default();
                 source
@@ -193,10 +200,11 @@ impl Searcher {
         &self,
         database: &Database,
         model: &Model,
+        sources: &[i64],
         num_results: usize,
         query: &str,
     ) -> Result<Vec<(Item, SearchItem)>, DbError> {
-        let items = self.search(model, num_results, query);
+        let items = self.search(model, sources, num_results, query);
 
         let values = items
             .iter()

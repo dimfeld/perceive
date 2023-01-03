@@ -1,5 +1,5 @@
 use clap::Args;
-use eyre::Result;
+use eyre::{eyre, Result};
 use owo_colors::OwoColorize;
 
 use crate::AppState;
@@ -9,15 +9,33 @@ pub struct SearchArgs {
     /// The query to search for
     pub query: String,
 
+    /// Search only in the specified source
+    #[clap(short, long)]
+    pub source: Option<String>,
+
     /// Return this number of search results
     #[clap(short, long, default_value_t = 20)]
     pub num_results: usize,
 }
 
 pub fn search(state: &mut AppState, args: SearchArgs) -> Result<()> {
+    let sources = match args.source {
+        Some(name) => {
+            let source = state
+                .sources
+                .iter()
+                .find(|s| s.name == name)
+                .ok_or_else(|| eyre!("Source not found"))?;
+
+            vec![source.id]
+        }
+        None => state.sources.iter().map(|s| s.id).collect(),
+    };
+
     let results = state.searcher.search_and_retrieve(
         &state.database,
         state.borrow_model(),
+        &sources,
         args.num_results,
         &args.query,
     )?;
