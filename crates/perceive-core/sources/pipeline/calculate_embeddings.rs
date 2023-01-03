@@ -1,4 +1,4 @@
-use std::sync::atomic::Ordering;
+use std::{panic::catch_unwind, sync::atomic::Ordering};
 
 use itertools::Itertools;
 use smallvec::{smallvec, SmallVec};
@@ -18,13 +18,15 @@ fn calculate_embeddings_batch(
         .embedding
         .fetch_add(documents.len() as u64, Ordering::Relaxed);
 
-    // TODO Don't unwrap. What is the proper way to handle an error here? Probably just quit
-    // the index job since it indicates some larger problem, but we also might need
-    // to reset the model or something (though it seems that Torch just panics
-    // in those cases).
-    eprintln!("start encode");
-    let embeddings: Vec<Vec<f32>> = model.encode(documents)?.into();
-    eprintln!("end encode");
+    let embeddings: Vec<Vec<f32>> = match catch_unwind(|| model.encode(documents)) {
+        Ok(Ok(embeddings)) => embeddings.into(),
+        Ok(Err(e)) => {
+            return Err(e.into());
+        }
+        Err(e) => {
+            return Err(eyre::eyre!("Panic in model.encode: {:?}", e));
+        }
+    };
 
     stats
         .embedding
@@ -92,6 +94,7 @@ pub(super) fn calculate_embeddings(
         }
 
         let output = calculate_embeddings_batch(stats, model, &mut batch, &documents)?;
+        // batch was cleared by the above, so just clear `documents`
         documents.clear();
 
         tx.send(output)?;

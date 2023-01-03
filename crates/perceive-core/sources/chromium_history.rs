@@ -224,7 +224,7 @@ impl SourceScanner for ChromiumHistoryScanner {
             req_headers.insert(http::header::IF_NONE_MATCH, etag);
         }
 
-        let response = self.client.get(dbg!(&item.external_id)).send();
+        let response = self.client.get(&item.external_id).send();
         let response = match response {
             Ok(r) => r,
             Err(_) => {

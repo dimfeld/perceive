@@ -49,28 +49,35 @@ fn reprocess(
     db_items_rx: flume::Receiver<Vec<Item>>,
     processed_tx: flume::Sender<ScanItem>,
 ) -> Result<()> {
+    // The Rayon threads here often end up waiting on channel sends while
+    // the model is encoding, but the model tokenizer also uses Rayon and so this starves
+    // them from running and everything deadlocks. So we use a separate pool here.
+    let pool = rayon::ThreadPoolBuilder::new().build()?;
     let scanner = source.create_scanner()?;
 
-    for batch in db_items_rx {
-        batch.into_par_iter().try_for_each(|mut item| {
-            times
-                .reading
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let result = scanner.reprocess(&mut item)?;
-            if matches!(result, SourceScannerReadResult::Found) {
+    pool.install(|| {
+        for batch in db_items_rx {
+            batch.into_par_iter().try_for_each(|mut item| {
                 times
-                    .fetched
+                    .reading
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                processed_tx.send(ScanItem {
-                    state: ScanItemState::Changed,
-                    existing: None,
-                    item,
-                })?;
-            }
+                let result = scanner.reprocess(&mut item)?;
+                if matches!(result, SourceScannerReadResult::Found) {
+                    times
+                        .fetched
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    processed_tx.send(ScanItem {
+                        state: ScanItemState::Changed,
+                        existing: None,
+                        item,
+                    })?;
+                }
 
-            Ok::<_, Report>(())
-        })?;
-    }
+                Ok::<_, Report>(())
+            })?;
+        }
+        Ok::<_, Report>(())
+    })?;
 
     Ok::<_, Report>(())
 }
