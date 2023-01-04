@@ -11,8 +11,14 @@ use crate::{paths::PROJECT_DIRS, Item, ItemMetadata};
 
 #[derive(Debug, Error)]
 pub enum DbError {
-    #[error("Failed to open database: {path}: {error}")]
-    Open { path: PathBuf, error: eyre::Report },
+    #[error("Failed to open database {path}")]
+    Open { path: PathBuf, source: eyre::Report },
+
+    #[error("Failed to upgrade database {path}")]
+    Migration {
+        path: PathBuf,
+        source: rusqlite_migration::Error,
+    },
 
     #[error("Database connection error: {0}")]
     PoolError(#[from] r2d2::Error),
@@ -57,12 +63,17 @@ impl DatabaseInner {
         let path = path.unwrap_or_else(|| PROJECT_DIRS.data_local_dir().join("perceive-search.db"));
         let mut write_conn = rusqlite::Connection::open(&path).map_err(|e| DbError::Open {
             path: path.clone(),
-            error: e.into(),
+            source: e.into(),
         })?;
 
-        Self::setup_database(&mut write_conn).map_err(|error| DbError::Open {
+        Self::configure_write_connection(&mut write_conn).map_err(|e| DbError::Open {
             path: path.clone(),
-            error,
+            source: e.into(),
+        })?;
+
+        Self::migrate(&mut write_conn).map_err(|e| DbError::Migration {
+            path: path.clone(),
+            source: e,
         })?;
 
         let read_manager = r2d2_sqlite::SqliteConnectionManager::file(&path)
@@ -70,7 +81,7 @@ impl DatabaseInner {
             .with_init(|conn| rusqlite::vtab::array::load_module(conn));
         let read_pool = r2d2::Pool::new(read_manager).map_err(|error| DbError::Open {
             path: path.clone(),
-            error: error.into(),
+            source: error.into(),
         })?;
 
         Ok(DatabaseInner {
@@ -79,13 +90,18 @@ impl DatabaseInner {
         })
     }
 
-    fn setup_database(conn: &mut Connection) -> Result<(), eyre::Report> {
-        let migrations = rusqlite_migration::Migrations::new(vec![rusqlite_migration::M::up(
-            include_str!("./migrations/00001_init.sql"),
-        )]);
-
+    fn configure_write_connection(conn: &mut Connection) -> Result<(), rusqlite::Error> {
         conn.pragma_update(None, "journal", "wal")?;
         conn.pragma_update(None, "synchronous", "normal")?;
+        conn.pragma_update(None, "foreign_keys", "on")?;
+        Ok(())
+    }
+
+    fn migrate(conn: &mut Connection) -> Result<(), rusqlite_migration::Error> {
+        let migrations = rusqlite_migration::Migrations::new(vec![
+            rusqlite_migration::M::up(include_str!("./migrations/00001_init.sql")),
+            rusqlite_migration::M::up(include_str!("./migrations/00002_tags.sql")),
+        ]);
 
         migrations.to_latest(conn)?;
         Ok(())

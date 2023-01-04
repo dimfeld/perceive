@@ -10,8 +10,7 @@ pub fn list_sources(database: &Database) -> Result<Vec<Source>, DbError> {
     let conn = database.read_pool.get()?;
     let mut stmt = conn.prepare_cached(
         "SELECT id, name, config, location, compare_strategy, status, last_indexed, index_version
-        FROM sources
-        WHERE deleted_at IS NULL",
+        FROM sources",
     )?;
 
     let rows = stmt
