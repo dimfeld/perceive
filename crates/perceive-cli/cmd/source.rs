@@ -4,8 +4,8 @@ use clap::{Args, Subcommand};
 use eyre::{eyre, Result};
 use indicatif::ProgressBar;
 use perceive_core::sources::{
-    db::update_source, pipeline::ScanStats, ChromiumHistoryConfig, FsSourceConfig,
-    ItemCompareStrategy, Source, SourceConfig,
+    db::update_source, pipeline::ScanStats, ChromiumBookmarksConfig, ChromiumHistoryConfig,
+    FsSourceConfig, ItemCompareStrategy, Source, SourceConfig,
 };
 use time::OffsetDateTime;
 
@@ -42,6 +42,7 @@ pub enum SourceTypeArgs {
     Fs(FsSourceTypeArgs),
     /// Read items from the browser history
     BrowserHistory(BrowserHistorySourceTypeArgs),
+    Bookmarks(BookmarksSourceTypeArgs),
 }
 
 #[derive(Debug, Args)]
@@ -56,6 +57,18 @@ pub struct FsSourceTypeArgs {
 #[derive(Debug, Args)]
 pub struct BrowserHistorySourceTypeArgs {
     /// The directory containing the history database
+    ///
+    /// In the future this will be expressible as a browser type, from which we'll infer the location.
+    pub location: String,
+
+    /// Domains that should be skipped.
+    #[clap(long)]
+    pub skip: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct BookmarksSourceTypeArgs {
+    /// The directory containing the bookmarks file
     ///
     /// In the future this will be expressible as a browser type, from which we'll infer the location.
     pub location: String,
@@ -111,6 +124,7 @@ fn add_source(state: &mut AppState, args: AddSourceArgs) -> eyre::Result<()> {
         SourceTypeArgs::BrowserHistory(cmdargs) => {
             add_browser_history_source(state, args.name, cmdargs)
         }
+        SourceTypeArgs::Bookmarks(cmdargs) => add_bookmarks_source(state, args.name, cmdargs),
     }
 }
 
@@ -165,6 +179,41 @@ fn add_browser_history_source(
         name,
         location,
         config: SourceConfig::ChromiumHistory(ChromiumHistoryConfig { skip: args.skip }),
+        compare_strategy: perceive_core::sources::ItemCompareStrategy::MTimeAndContent,
+        status: perceive_core::sources::SourceStatus::Indexing {
+            started_at: now.unix_timestamp(),
+        },
+        last_indexed: now,
+        index_version: 0,
+    };
+
+    let source = perceive_core::sources::db::add_source(&state.database, source)?;
+    state.sources.push(source);
+    Ok(())
+}
+
+fn add_bookmarks_source(
+    state: &mut AppState,
+    name: String,
+    args: BookmarksSourceTypeArgs,
+) -> eyre::Result<()> {
+    let now = OffsetDateTime::now_utc();
+    let location = shellexpand::tilde(&args.location).into_owned();
+    let has_history = std::fs::metadata(Path::new(&location).join("Bookmarks"))
+        .map(|m| m.is_file())
+        .unwrap_or(false);
+
+    if !has_history {
+        return Err(eyre!(
+            "Location must be a directory containing a Bookmarks file"
+        ));
+    }
+
+    let source = Source {
+        id: 0, // filled in by add_source
+        name,
+        location,
+        config: SourceConfig::ChromiumBookmarks(ChromiumBookmarksConfig { skip: args.skip }),
         compare_strategy: perceive_core::sources::ItemCompareStrategy::MTimeAndContent,
         status: perceive_core::sources::SourceStatus::Indexing {
             started_at: now.unix_timestamp(),

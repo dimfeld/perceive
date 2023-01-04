@@ -1,27 +1,18 @@
-use std::{borrow::Cow, io::Cursor, path::Path, time::SystemTime};
+use std::{borrow::Cow, path::Path};
 
 use ahash::HashMap;
 use eyre::{eyre, Context};
-use http::{HeaderValue, StatusCode};
 use itertools::Itertools;
 use reqwest::{blocking::Client, Url};
 use serde::{Deserialize, Serialize};
-use time::{macros::datetime, OffsetDateTime};
+use time::macros::datetime;
 
 use super::{
+    parse_html::{fetch_html, reprocess_html_article, should_skip, HTML_PROCESS_VERSION},
     pipeline::{CountingVecSender, FoundItem, SourceScanner, SourceScannerReadResult},
     ItemCompareStrategy,
 };
-use crate::{Item, SkipReason};
-
-const ALWAYS_SKIP: [&str; 5] = [
-    // Signin pages. These show up a lot but never contain searchable content.
-    "accounts.google.com",
-    "ad.doubleclick.net",
-    "console.cloud.google.com",
-    "console.aws.amazon.com",
-    "googleapis.com",
-];
+use crate::Item;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChromiumHistoryConfig {
@@ -54,18 +45,7 @@ impl ChromiumHistoryScanner {
                 .build()?,
         })
     }
-
-    fn extract_html_article(
-        url: &Url,
-        raw_content: &[u8],
-    ) -> Result<readability::extractor::Product, eyre::Report> {
-        let mut cursor = Cursor::new(raw_content);
-        readability::extractor::extract(&mut cursor, url).map_err(|e| e.into())
-    }
 }
-
-/// Increment this when the postprocessing pipeline changes.
-const PROCESS_VERSION: i32 = 1;
 
 impl SourceScanner for ChromiumHistoryScanner {
     fn scan(&self, tx: CountingVecSender<Item>) -> Result<(), eyre::Report> {
@@ -120,17 +100,7 @@ impl SourceScanner for ChromiumHistoryScanner {
                 url_str = url.to_string();
             }
 
-            // Skip any domains that end in a skipped domain, to handle both
-            // both wildcard domains and specific subdomains.
-            let host = url.host_str().unwrap_or("");
-            let skip = self
-                .config
-                .skip
-                .iter()
-                .map(|s| s.as_str())
-                .chain(ALWAYS_SKIP.iter().copied())
-                .any(|skip| host.ends_with(skip));
-            if skip {
+            if should_skip(&self.config.skip, &url) {
                 continue;
             }
 
@@ -170,7 +140,7 @@ impl SourceScanner for ChromiumHistoryScanner {
                     },
                     content: None,
                     raw_content: None,
-                    process_version: PROCESS_VERSION,
+                    process_version: HTML_PROCESS_VERSION,
                 })
                 .collect::<Vec<_>>();
 
@@ -207,114 +177,11 @@ impl SourceScanner for ChromiumHistoryScanner {
             }
         }
 
-        let mut req_headers = reqwest::header::HeaderMap::with_capacity(2);
-        if let Some(mtime) = item.metadata.mtime {
-            let systime = SystemTime::UNIX_EPOCH
-                + std::time::Duration::from_secs(mtime.unix_timestamp() as u64);
-            if let Ok(value) = HeaderValue::from_str(&httpdate::fmt_http_date(systime)) {
-                req_headers.insert(reqwest::header::IF_MODIFIED_SINCE, value);
-            }
-        }
-
-        let etag = item
-            .hash
-            .as_ref()
-            .and_then(|e| HeaderValue::from_str(e).ok());
-        if let Some(etag) = etag {
-            req_headers.insert(http::header::IF_NONE_MATCH, etag);
-        }
-
-        let response = self.client.get(&item.external_id).send();
-        let response = match response {
-            Ok(r) => r,
-            Err(_) => {
-                item.skipped = Some(SkipReason::FetchError);
-                return Ok(SourceScannerReadResult::Found);
-            }
-        };
-
-        let status = response.status();
-
-        let unchanged = matches!(status, StatusCode::NOT_MODIFIED);
-        if unchanged {
-            return Ok(SourceScannerReadResult::Unchanged);
-        }
-
-        let skip_reason = match status {
-            StatusCode::FORBIDDEN | StatusCode::UNAUTHORIZED => Some(SkipReason::Unauthorized),
-            StatusCode::NOT_FOUND => Some(SkipReason::NotFound),
-            // This is handled later, but we don't want it to fall in the redirect case.
-            StatusCode::NOT_MODIFIED => None,
-            s if s.is_redirection() => Some(SkipReason::Redirected),
-            s if s.is_client_error() || s.is_server_error() => Some(SkipReason::FetchError),
-            _ => None,
-        };
-
-        if skip_reason.is_some() {
-            item.skipped = skip_reason;
-            return Ok(SourceScannerReadResult::Found);
-        }
-
-        let headers = response.headers();
-        let content_type = headers
-            .get(http::header::CONTENT_TYPE)
-            .map(|v| {
-                let value = v.to_str().unwrap_or_default();
-                match value.split_once(';') {
-                    Some((mime, _)) => mime.trim(),
-                    None => value.trim(),
-                }
-            })
-            .unwrap_or("text/plain");
-        item.hash = headers
-            .get(http::header::ETAG)
-            .and_then(|v| v.to_str().map(String::from).ok());
-        item.metadata.mtime = headers
-            .get(http::header::LAST_MODIFIED)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| httpdate::parse_http_date(v).ok())
-            .map(OffsetDateTime::from);
-
-        if !content_type.starts_with("text/") {
-            // Save the item but with empty content. This leaves us with the title, which can be
-            // useful for PDFs, and also helps us to store the etag, modified
-            // date, etc. so that we aren't doing full fetches over and over again.
-            item.content = Some(String::new());
-            return Ok(SourceScannerReadResult::Found);
-        }
-
-        let is_html = content_type.starts_with("text/html");
-
-        let raw_content = response.text()?;
-        if raw_content.is_empty() {
-            item.skipped = Some(SkipReason::NoContent);
-            return Ok(SourceScannerReadResult::Found);
-        }
-
-        if is_html {
-            let url = Url::parse(&item.external_id)?;
-
-            let (doc, raw_compressed) = rayon::join(
-                || Self::extract_html_article(&url, raw_content.as_bytes()),
-                || zstd::encode_all(raw_content.as_bytes(), 3),
-            );
-
-            item.raw_content = Some(raw_compressed?);
-
-            let doc = doc?;
-            item.metadata.name = Some(doc.title);
-            item.content = Some(doc.text);
-        } else {
-            item.content = Some(raw_content);
-        }
-
-        item.process_version = PROCESS_VERSION;
-
-        Ok(SourceScannerReadResult::Found)
+        fetch_html(&self.client, existing, item)
     }
 
     fn latest_process_version(&self) -> i32 {
-        PROCESS_VERSION
+        HTML_PROCESS_VERSION
     }
 
     fn reprocess(&self, item: &mut Item) -> Result<SourceScannerReadResult, eyre::Report> {
@@ -322,36 +189,6 @@ impl SourceScanner for ChromiumHistoryScanner {
         //     return Ok(SourceScannerReadResult::Unchanged);
         // }
 
-        let Some(raw_content) = item.raw_content.as_ref() else {
-            return Ok(SourceScannerReadResult::Unchanged);
-        };
-
-        let raw_content = zstd::decode_all(raw_content.as_slice())
-            .wrap_err_with(|| format!("{} - decompressing content", item.external_id))?;
-        let url = Url::parse(&item.external_id)?;
-        let doc = Self::extract_html_article(&url, &raw_content)
-            .wrap_err_with(|| format!("{} - extracting content", item.external_id))?;
-
-        let changed = item
-            .metadata
-            .name
-            .as_ref()
-            .map(|n| n != &doc.title)
-            .unwrap_or(true)
-            || item
-                .content
-                .as_ref()
-                .map(|c| c != &doc.text)
-                .unwrap_or(true);
-
-        if !changed {
-            return Ok(SourceScannerReadResult::Unchanged);
-        }
-
-        item.process_version = PROCESS_VERSION;
-        item.metadata.name = Some(doc.title);
-        item.content = Some(doc.text);
-
-        Ok(SourceScannerReadResult::Found)
+        reprocess_html_article(item)
     }
 }
