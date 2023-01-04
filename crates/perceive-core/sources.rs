@@ -1,7 +1,9 @@
+mod chromium_bookmarks;
 #[cfg(feature = "browser-history")]
 mod chromium_history;
 pub mod db;
 mod fs;
+pub mod parse_html;
 pub mod pipeline;
 
 pub use fs::FsSourceConfig;
@@ -10,9 +12,11 @@ use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString};
 use time::OffsetDateTime;
 
-#[cfg(feature = "browser-history")]
-pub use self::chromium_history::ChromiumHistoryConfig;
 use self::pipeline::SourceScanner;
+#[cfg(feature = "browser-history")]
+pub use self::{
+    chromium_bookmarks::ChromiumBookmarksConfig, chromium_history::ChromiumHistoryConfig,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
@@ -20,6 +24,8 @@ pub enum SourceConfig {
     Fs(FsSourceConfig),
     #[cfg(feature = "browser-history")]
     ChromiumHistory(ChromiumHistoryConfig),
+    #[cfg(feature = "browser-history")]
+    ChromiumBookmarks(ChromiumBookmarksConfig),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,6 +92,14 @@ impl Source {
             #[cfg(feature = "browser-history")]
             SourceConfig::ChromiumHistory(config) => {
                 Box::new(chromium_history::ChromiumHistoryScanner::new(
+                    self.id,
+                    self.location.clone(),
+                    config.clone(),
+                )?)
+            }
+            #[cfg(feature = "browser-history")]
+            SourceConfig::ChromiumBookmarks(config) => {
+                Box::new(chromium_bookmarks::ChromiumBookmarksScanner::new(
                     self.id,
                     self.location.clone(),
                     config.clone(),
