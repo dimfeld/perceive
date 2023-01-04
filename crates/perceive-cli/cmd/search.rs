@@ -1,6 +1,7 @@
 use clap::Args;
 use eyre::{eyre, Result};
 use owo_colors::OwoColorize;
+use perceive_core::sources::SourceTypeTag;
 
 use crate::AppState;
 
@@ -10,17 +11,26 @@ pub struct SearchArgs {
     pub query: String,
 
     /// Search only in the specified source
-    #[clap(short, long)]
+    #[arg(short, long)]
     pub source: Option<String>,
 
+    /// Search only sources of a particular type
+    #[arg(
+        rename_all = "kebab-case",
+        short = 't',
+        long = "type",
+        conflicts_with("source")
+    )]
+    pub source_type: Option<SourceTypeTag>,
+
     /// Return this number of search results
-    #[clap(short, long, default_value_t = 20)]
+    #[arg(short, long, default_value_t = 20)]
     pub num_results: usize,
 }
 
 pub fn search(state: &mut AppState, args: SearchArgs) -> Result<()> {
-    let sources = match args.source {
-        Some(name) => {
+    let sources = match (args.source, args.source_type) {
+        (Some(name), _) => {
             let source = state
                 .sources
                 .iter()
@@ -29,7 +39,13 @@ pub fn search(state: &mut AppState, args: SearchArgs) -> Result<()> {
 
             vec![source.id]
         }
-        None => state.sources.iter().map(|s| s.id).collect(),
+        (None, Some(source_type)) => state
+            .sources
+            .iter()
+            .filter(|s| s.config.matches_tag(source_type))
+            .map(|s| s.id)
+            .collect(),
+        (None, None) => state.sources.iter().map(|s| s.id).collect(),
     };
 
     let results = state.searcher.search_and_retrieve(

@@ -18,6 +18,18 @@ pub use self::{
     chromium_bookmarks::ChromiumBookmarksConfig, chromium_history::ChromiumHistoryConfig,
 };
 
+#[derive(Debug, Copy, Clone, strum::EnumString)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
+#[strum(serialize_all = "snake_case")]
+pub enum SourceTypeTag {
+    /// Local sources
+    Local,
+    /// Sources that fetch data from the web
+    Web,
+    /// Sources that hold bookmarks
+    Bookmarks,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum SourceConfig {
@@ -26,6 +38,19 @@ pub enum SourceConfig {
     ChromiumHistory(ChromiumHistoryConfig),
     #[cfg(feature = "browser-history")]
     ChromiumBookmarks(ChromiumBookmarksConfig),
+}
+
+impl SourceConfig {
+    pub fn matches_tag(&self, tag: SourceTypeTag) -> bool {
+        match (self, tag) {
+            (Self::Fs(_), SourceTypeTag::Local) => true,
+            #[cfg(feature = "browser-history")]
+            (Self::ChromiumHistory(_), SourceTypeTag::Web) => true,
+            #[cfg(feature = "browser-history")]
+            (Self::ChromiumBookmarks(_), SourceTypeTag::Web | SourceTypeTag::Bookmarks) => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

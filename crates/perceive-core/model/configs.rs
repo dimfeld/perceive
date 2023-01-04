@@ -26,7 +26,7 @@ use strum::{AsRefStr, Display, EnumIter, EnumString, EnumVariantNames};
     EnumIter,
     EnumVariantNames,
 )]
-#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 pub enum SentenceEmbeddingsModelType {
     AllMiniLmL6V2,
     AllMiniLmL12V2,
