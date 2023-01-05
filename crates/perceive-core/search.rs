@@ -162,15 +162,13 @@ impl Searcher {
         Ok(source_search)
     }
 
-    pub fn search(
+    pub fn search_vector(
         &self,
-        model: &Model,
         sources: &[i64],
         num_results: usize,
-        query: &str,
+        vector: Vec<f32>,
     ) -> Vec<SearchItem> {
-        let term_embedding: Vec<f32> = Vec::from(model.encode(&[query]).unwrap()).pop().unwrap();
-        let search_point = Point::from(term_embedding);
+        let search_point = Point::from(vector);
 
         let mut results = self
             .sources
@@ -196,15 +194,29 @@ impl Searcher {
         results
     }
 
-    pub fn search_and_retrieve(
+    pub fn encode_query(model: &Model, query: &str) -> Vec<f32> {
+        Vec::from(model.encode(&[query]).unwrap()).pop().unwrap()
+    }
+
+    pub fn search(
         &self,
-        database: &Database,
         model: &Model,
         sources: &[i64],
         num_results: usize,
         query: &str,
+    ) -> Vec<SearchItem> {
+        let term_embedding = Self::encode_query(model, query);
+        self.search_vector(sources, num_results, term_embedding)
+    }
+
+    pub fn search_vector_and_retrieve(
+        &self,
+        database: &Database,
+        sources: &[i64],
+        num_results: usize,
+        vector: Vec<f32>,
     ) -> Result<Vec<(Item, SearchItem)>, DbError> {
-        let items = self.search(model, sources, num_results, query);
+        let items = self.search_vector(sources, num_results, vector);
 
         let values = items
             .iter()
@@ -249,6 +261,18 @@ impl Searcher {
 
         rows.sort_unstable_by(|a, b| a.1.score.partial_cmp(&b.1.score).unwrap());
         Ok(rows)
+    }
+
+    pub fn search_and_retrieve(
+        &self,
+        database: &Database,
+        model: &Model,
+        sources: &[i64],
+        num_results: usize,
+        query: &str,
+    ) -> Result<Vec<(Item, SearchItem)>, DbError> {
+        let vector = Self::encode_query(model, query);
+        self.search_vector_and_retrieve(database, sources, num_results, vector)
     }
 }
 
