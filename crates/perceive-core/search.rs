@@ -194,10 +194,6 @@ impl Searcher {
         results
     }
 
-    pub fn encode_query(model: &Model, query: &str) -> Vec<f32> {
-        Vec::from(model.encode(&[query]).unwrap()).pop().unwrap()
-    }
-
     pub fn search(
         &self,
         model: &Model,
@@ -205,7 +201,7 @@ impl Searcher {
         num_results: usize,
         query: &str,
     ) -> Vec<SearchItem> {
-        let term_embedding = Self::encode_query(model, query);
+        let term_embedding = encode_query(model, query);
         self.search_vector(sources, num_results, term_embedding)
     }
 
@@ -271,9 +267,13 @@ impl Searcher {
         num_results: usize,
         query: &str,
     ) -> Result<Vec<(Item, SearchItem)>, DbError> {
-        let vector = Self::encode_query(model, query);
+        let vector = encode_query(model, query);
         self.search_vector_and_retrieve(database, sources, num_results, vector)
     }
+}
+
+pub fn encode_query(model: &Model, query: &str) -> Vec<f32> {
+    Vec::from(model.encode(&[query]).unwrap()).pop().unwrap()
 }
 
 #[derive(Clone)]

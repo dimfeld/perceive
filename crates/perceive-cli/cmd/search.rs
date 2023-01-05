@@ -1,14 +1,22 @@
 use clap::Args;
 use eyre::{eyre, Result};
 use owo_colors::OwoColorize;
-use perceive_core::sources::SourceTypeTag;
+use perceive_core::{
+    search::{self, deserialize_embedding},
+    sources::SourceTypeTag,
+};
 
 use crate::AppState;
 
 #[derive(Args, Debug)]
 pub struct SearchArgs {
     /// The query to search for
-    pub query: String,
+    #[arg(required_unless_present("like"))]
+    pub query: Option<String>,
+
+    /// Find items that are most similar to the item with this ID.
+    #[arg(short, long, conflicts_with("query"), required_unless_present("query"))]
+    pub like: Option<i64>,
 
     /// Search only in the specified source
     #[arg(short, long)]
@@ -48,12 +56,44 @@ pub fn search(state: &mut AppState, args: SearchArgs) -> Result<()> {
         (None, None) => state.sources.iter().map(|s| s.id).collect(),
     };
 
-    let results = state.searcher.search_and_retrieve(
+    let (query, input_vec) = match (args.query, args.like) {
+        (Some(query), _) => {
+            let term_embedding = search::encode_query(state.borrow_model(), &query);
+            (query, term_embedding)
+        }
+        (None, Some(like)) => {
+            let conn = state.database.read_pool.get()?;
+            let mut stmt = conn.prepare_cached(
+                "SELECT name, embedding
+                FROM items
+                JOIN item_embeddings ie ON ie.item_id=items.id
+                WHERE id = ? AND model_id = ? AND model_version = ?",
+            )?;
+
+            let (name, embedding) = stmt
+                .query_and_then(
+                    [like, state.model_id as i64, state.model_version as i64],
+                    |row| {
+                        let name: String = row.get(0)?;
+                        let v = row.get_ref(1)?.as_blob()?;
+                        Ok::<_, eyre::Report>((name, deserialize_embedding(v)))
+                    },
+                )?
+                .next()
+                .ok_or_else(|| eyre!("Item not found"))??;
+
+            (name, embedding)
+        }
+        (None, None) => {
+            return Err(eyre!("No query provided"));
+        }
+    };
+
+    let results = state.searcher.search_vector_and_retrieve(
         &state.database,
-        state.borrow_model(),
         &sources,
         args.num_results,
-        &args.query,
+        input_vec,
     )?;
 
     let result_docs = results
@@ -61,9 +101,7 @@ pub fn search(state: &mut AppState, args: SearchArgs) -> Result<()> {
         .map(|r| r.0.content.as_deref().unwrap_or_default())
         .collect::<Vec<_>>();
 
-    let highlights = state
-        .highlights_model
-        .highlight(&args.query, &result_docs)?;
+    let highlights = state.highlights_model.highlight(&query, &result_docs)?;
 
     for (index, (result, item)) in results.iter().enumerate() {
         let desc = result.metadata.name.as_ref().unwrap_or(&result.external_id);
