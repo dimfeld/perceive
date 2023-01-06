@@ -5,6 +5,7 @@
 mod configs;
 mod highlight;
 pub mod tokenize;
+mod worker;
 
 pub use configs::SentenceEmbeddingsModelType;
 use rust_bert::{
@@ -21,18 +22,46 @@ use rust_bert::{
 };
 use rust_tokenizers::tokenizer::TruncationStrategy;
 use tch::{nn, Tensor};
+use thiserror::Error;
+
+use self::worker::{sentence_embeddings_model_worker, ModelWorkerCommand, ModelWorkerCommandData};
+
+#[derive(Debug, Error)]
+pub enum ModelError {
+    #[error("Model has shut down")]
+    WorkerSendError,
+
+    #[error("Model has shut down")]
+    WorkerReceiveError,
+
+    #[error("Model error: {0}")]
+    ModelPanic(eyre::Report),
+
+    #[error(transparent)]
+    RustBertError(#[from] RustBertError),
+}
+
+impl From<oneshot::RecvError> for ModelError {
+    fn from(_value: oneshot::RecvError) -> Self {
+        Self::WorkerReceiveError
+    }
+}
+
+impl From<flume::SendError<ModelWorkerCommand>> for ModelError {
+    fn from(_value: flume::SendError<ModelWorkerCommand>) -> Self {
+        Self::WorkerSendError
+    }
+}
 
 pub struct Model {
     pub model_type: SentenceEmbeddingsModelType,
 
+    model_msg_tx: flume::Sender<worker::ModelWorkerCommand>,
+    worker_thread: std::thread::JoinHandle<()>,
+
     sentence_bert_config: SentenceEmbeddingsSentenceBertConfig,
     tokenizer: TokenizerOption,
     tokenizer_truncation_strategy: TruncationStrategy,
-    var_store: nn::VarStore,
-    transformer: SentenceEmbeddingsOption,
-    pooling_layer: Pooling,
-    dense_layer: Option<Dense>,
-    normalize_embeddings: bool,
 }
 
 impl Model {
@@ -121,52 +150,43 @@ impl Model {
 
         let normalize_embeddings = modules.has_normalization();
 
-        Ok(Model {
-            model_type,
-            sentence_bert_config,
-            tokenizer,
-            tokenizer_truncation_strategy: TruncationStrategy::LongestFirst,
+        let worker_data = worker::WorkerData {
             var_store,
             transformer,
             pooling_layer,
             dense_layer,
             normalize_embeddings,
+        };
+
+        let (model_msg_tx, model_msg_rx) = flume::bounded(8);
+
+        let worker_thread =
+            std::thread::spawn(|| sentence_embeddings_model_worker(model_msg_rx, worker_data));
+
+        Ok(Model {
+            model_type,
+            sentence_bert_config,
+            tokenizer,
+            tokenizer_truncation_strategy: TruncationStrategy::LongestFirst,
+            model_msg_tx,
+            worker_thread,
         })
+    }
+
+    pub fn encode<S: AsRef<str> + Sync>(&self, inputs: &[S]) -> Result<Tensor, ModelError> {
+        let tokens = self.tokenize(inputs);
+        self.encode_tokens(tokens)
     }
 
     pub fn encode_tokens(
         &self,
-        tokens: &SentenceEmbeddingsTokenizerOuput,
-    ) -> Result<Tensor, RustBertError> {
-        let tokens_ids = Tensor::stack(&tokens.tokens_ids, 0).to(self.var_store.device());
-        let tokens_masks = Tensor::stack(&tokens.tokens_masks, 0).to(self.var_store.device());
+        tokens: SentenceEmbeddingsTokenizerOuput,
+    ) -> Result<Tensor, ModelError> {
+        let (msg, rx) = ModelWorkerCommandData::build(tokens);
 
-        let (tokens_embeddings, _all_attentions) =
-            tch::no_grad(|| self.transformer.forward(&tokens_ids, &tokens_masks))?;
+        self.model_msg_tx.send(ModelWorkerCommand::Encode(msg))?;
 
-        let mean_pool =
-            tch::no_grad(|| self.pooling_layer.forward(tokens_embeddings, &tokens_masks));
-        let maybe_linear = if let Some(dense_layer) = &self.dense_layer {
-            tch::no_grad(|| dense_layer.forward(&mean_pool))
-        } else {
-            mean_pool
-        };
-        let maybe_normalized = if self.normalize_embeddings {
-            let norm = &maybe_linear
-                .norm_scalaropt_dim(2, &[1], true)
-                .clamp_min(1e-12)
-                .expand_as(&maybe_linear);
-            maybe_linear / norm
-        } else {
-            maybe_linear
-        };
-
-        Ok(maybe_normalized)
-    }
-
-    pub fn encode<S: AsRef<str> + Sync>(&self, inputs: &[S]) -> Result<Tensor, RustBertError> {
-        let tokens = self.tokenize(inputs);
-        self.encode_tokens(&tokens)
+        rx.recv()?
     }
 }
 

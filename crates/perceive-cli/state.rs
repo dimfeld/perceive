@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use eyre::eyre;
 use perceive_core::{
@@ -8,7 +8,7 @@ use perceive_core::{
 };
 
 pub struct AppState {
-    pub model: Option<Model>,
+    pub model: Arc<Model>,
     pub model_id: u32,
     pub model_version: u32,
     pub highlights_model: Model,
@@ -57,7 +57,7 @@ impl AppState {
         let sources = perceive_core::sources::db::list_sources(&db)?;
 
         Ok(AppState {
-            model: Some(main_model),
+            model: Arc::new(main_model),
             model_id,
             model_version,
             highlights_model,
@@ -65,17 +65,5 @@ impl AppState {
             searcher,
             sources,
         })
-    }
-
-    pub fn borrow_model(&self) -> &Model {
-        self.model.as_ref().unwrap()
-    }
-
-    pub fn loan_model(&mut self) -> Model {
-        self.model.take().expect("Model is not loaned twice")
-    }
-
-    pub fn return_model(&mut self, model: Model) {
-        self.model = Some(model);
     }
 }

@@ -2213,6 +2213,7 @@ checksum = "ff50ecb28bb86013e935fb6683ab1f6d3a20016f123c76fd4c27470076ac30f5"
 dependencies = [
  "cfg-if",
  "generator",
+ "pin-utils",
  "scoped-tls",
  "serde",
  "serde_json",
@@ -2585,6 +2586,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "oneshot"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc22d22931513428ea6cc089e942d38600e3d00976eef8c86de6b8a3aadec6eb"
+dependencies = [
+ "loom",
+]
+
+[[package]]
 name = "opaque-debug"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2787,6 +2797,7 @@ dependencies = [
  "itertools",
  "ndarray",
  "once_cell",
+ "oneshot",
  "parking_lot",
  "r2d2",
  "r2d2_sqlite",

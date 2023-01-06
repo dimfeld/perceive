@@ -288,27 +288,19 @@ fn scan_source(state: &mut AppState, args: ScanSourceArgs) -> eyre::Result<()> {
             None
         };
 
-        // The model is Send but not Sync, so we transfer the entire thing into the scanner thread.
-        let model = state.loan_model();
-        let returned_model = match perceive_core::sources::scan_source(
+        let result = perceive_core::sources::scan_source(
             &times,
             &state.database,
-            model,
+            &state.model,
             state.model_id,
             state.model_version,
             &state.sources[source_pos],
             compare_strategy,
-        ) {
-            Ok(model) => model,
-            Err((model, e)) => {
-                println!("Error: {}", e);
-                model
-            }
-        };
+        );
 
-        state.return_model(returned_model);
         done.store(true, std::sync::atomic::Ordering::Relaxed);
-    });
+        result
+    })?;
 
     let source = &mut state.sources[source_pos];
     source.status = perceive_core::sources::SourceStatus::Ready {
@@ -389,27 +381,17 @@ fn reprocess_source(state: &mut AppState, args: ReprocessArgs) -> Result<()> {
             scanned_progress.finish();
         });
 
-        let model = state.loan_model();
         let reprocess_result = perceive_core::sources::pipeline::reprocess_source(
             &times,
             &state.database,
-            model,
+            &state.model,
             state.model_id,
             state.model_version,
             &state.sources[source_pos],
         );
         done.store(true, std::sync::atomic::Ordering::Relaxed);
 
-        match reprocess_result {
-            Ok(model) => {
-                state.return_model(model);
-                Ok(())
-            }
-            Err((model, e)) => {
-                state.return_model(model);
-                Err(e)
-            }
-        }
+        reprocess_result
     })?;
 
     rebuild_search(state, RebuildSearchArgs { name: args.name })

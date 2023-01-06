@@ -1,4 +1,4 @@
-use std::{panic::catch_unwind, sync::atomic::Ordering};
+use std::sync::atomic::Ordering;
 
 use itertools::Itertools;
 use smallvec::{smallvec, SmallVec};
@@ -18,16 +18,7 @@ fn calculate_embeddings_batch(
         .embedding
         .fetch_add(documents.len() as u64, Ordering::Relaxed);
 
-    let embeddings: Vec<Vec<f32>> = match catch_unwind(|| model.encode(documents)) {
-        Ok(Ok(embeddings)) => embeddings.into(),
-        Ok(Err(e)) => {
-            return Err(e.into());
-        }
-        Err(e) => {
-            return Err(eyre::eyre!("Panic in model.encode: {:?}", e));
-        }
-    };
-
+    let embeddings: Vec<Vec<f32>> = model.encode(documents)?.into();
     stats
         .embedding
         .fetch_sub(documents.len() as u64, Ordering::Relaxed);

@@ -1,6 +1,7 @@
 use std::rc::Rc;
 
 use ahash::HashSet;
+#[cfg(feature = "cli")]
 use indicatif::ProgressStyle;
 use rayon::prelude::*;
 use rusqlite::Connection;
@@ -51,7 +52,14 @@ impl Searcher {
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
-        let sources = Self::build_sources(&conn, model_id, model_version, sources, progress)?;
+        let sources = Self::build_sources(
+            &conn,
+            model_id,
+            model_version,
+            sources,
+            #[cfg(feature = "cli")]
+            progress,
+        )?;
 
         Ok(Searcher {
             sources,
@@ -75,6 +83,7 @@ impl Searcher {
             model_id,
             model_version,
             vec![(source_id, source_name)],
+            #[cfg(feature = "cli")]
             progress,
         )?;
 
@@ -131,6 +140,7 @@ impl Searcher {
         }
 
         let longest_name = sources.iter().map(|x| x.1.len()).max().unwrap_or(20);
+        #[cfg(feature = "cli")]
         let progress_template = format!("{{prefix:{longest_name}}} {{bar:40}} {{pos}}/{{len}}");
 
         let source_search = sources

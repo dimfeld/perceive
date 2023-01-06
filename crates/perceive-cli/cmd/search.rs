@@ -58,7 +58,7 @@ pub fn search(state: &mut AppState, args: SearchArgs) -> Result<()> {
 
     let (query, input_vec) = match (args.query, args.like) {
         (Some(query), _) => {
-            let term_embedding = search::encode_query(state.borrow_model(), &query);
+            let term_embedding = search::encode_query(&state.model, &query);
             (query, term_embedding)
         }
         (None, Some(like)) => {

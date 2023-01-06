@@ -85,12 +85,12 @@ fn reprocess(
 pub fn reprocess_source(
     times: &ScanStats,
     database: &Database,
-    model: Model,
+    model: &Model,
     model_id: u32,
     model_version: u32,
     source: &Source,
-) -> Result<Model, (Model, eyre::Report)> {
-    let returned_model = std::thread::scope(|scope| {
+) -> Result<(), eyre::Report> {
+    std::thread::scope(|scope| {
         let (db_items_tx, db_items_rx) = flume::unbounded();
         let (processed_tx, processed_rx) = flume::bounded(EMBEDDING_BATCH_SIZE);
         let (with_embeddings_tx, with_embeddings_rx) = flume::bounded(8);
@@ -105,16 +105,8 @@ pub fn reprocess_source(
             )
         });
 
-        let embed_task = scope.spawn(move || {
-            let result = wrap_thread(
-                "embedder",
-                calculate_embeddings(times, &model, processed_rx, with_embeddings_tx),
-            );
-            match result {
-                Ok(()) => Ok(model),
-                Err(e) => Err((model, e)),
-            }
-        });
+        let embed_task =
+            scope.spawn(|| calculate_embeddings(times, model, processed_rx, with_embeddings_tx));
 
         let write_db_task = scope.spawn(|| {
             wrap_thread(
@@ -133,24 +125,14 @@ pub fn reprocess_source(
         let mut errored = false;
 
         errored = errored || log_thread_error("db_writer", write_db_task.join());
-        let returned_model = match embed_task.join().unwrap() {
-            Ok(model) => model,
-            Err((model, e)) => {
-                errored = true;
-                eprintln!("Encoding thread error: {e}");
-                model
-            }
-        };
-
+        errored = errored || log_thread_error("encoding task", embed_task.join());
         errored = errored || log_thread_error("processor", process_task.join());
         errored = errored || log_thread_error("reader", read_task.join());
 
         if errored {
             println!("Reprocessing failed");
         }
-
-        returned_model
     });
 
-    Ok(returned_model)
+    Ok(())
 }

@@ -1,8 +1,7 @@
 use itertools::Itertools;
 use once_cell::sync::Lazy;
-use rust_bert::RustBertError;
 
-use super::Model;
+use super::{Model, ModelError};
 use crate::dot_product;
 
 static CHUNK_SIZES: Lazy<(usize, usize)> = Lazy::new(|| {
@@ -25,7 +24,7 @@ impl Model {
         &'s self,
         query: &'doc str,
         documents: &'doc [S],
-    ) -> Result<Vec<Option<&'doc str>>, RustBertError> {
+    ) -> Result<Vec<Option<&'doc str>>, ModelError> {
         // Encode the query
         let query_encoding = self.encode(&[query])?;
 
@@ -106,7 +105,7 @@ impl Model {
         let scores = if tensors.tokens_ids.is_empty() {
             Vec::new()
         } else {
-            let docs_encoding = self.encode_tokens(&tensors)?;
+            let docs_encoding = self.encode_tokens(tensors)?;
             let scores: Vec<f32> = dot_product(&query_encoding, &docs_encoding).into();
             scores
         };

@@ -12,20 +12,16 @@ use crate::{
 pub fn scan_source(
     times: &ScanStats,
     database: &Database,
-    model: Model,
+    model: &Model,
     model_id: u32,
     model_version: u32,
     source: &Source,
     override_compare_strategy: Option<ItemCompareStrategy>,
-) -> Result<Model, (Model, eyre::Report)> {
-    let scanner = match source.create_scanner() {
-        Ok(scanner) => scanner,
-        Err(e) => return Err((model, e)),
-    };
+) -> Result<(), eyre::Report> {
+    let scanner = source.create_scanner()?;
     let compare_strategy = override_compare_strategy.unwrap_or(source.compare_strategy);
 
-    #[allow(clippy::let_and_return)] // Much easier to read this way
-    let returned_model = std::thread::scope(|scope| {
+    std::thread::scope(|scope| {
         let (item_tx, item_rx) = flume::unbounded();
         let (matched_tx, matched_rx) = flume::bounded(256);
         let (with_content_tx, with_content_rx) = flume::bounded(EMBEDDING_BATCH_SIZE);
@@ -80,13 +76,8 @@ pub fn scan_source(
 
         // STAGE 4
         // - Calculate embeddings for the items in this batch that we are keeping.
-        let embed_task = scope.spawn(move || {
-            let result = calculate_embeddings(times, &model, with_content_rx, with_embeddings_tx);
-            match result {
-                Ok(()) => Ok(model),
-                Err(e) => Err((model, e)),
-            }
-        });
+        let embed_task =
+            scope.spawn(|| calculate_embeddings(times, model, with_content_rx, with_embeddings_tx));
 
         // STAGE 5
         // - Update the database for items that will be kept
@@ -104,15 +95,7 @@ pub fn scan_source(
         // TODO - handle errors better
         let mut errored = false;
         errored = errored || log_thread_error("db_writer", write_db_task.join());
-        let returned_model = match embed_task.join().unwrap() {
-            Ok(model) => model,
-            Err((model, e)) => {
-                errored = true;
-                eprintln!("Encoding thread error: {e}");
-                model
-            }
-        };
-
+        errored = errored || log_thread_error("encoding task", embed_task.join());
         for read_task in read_tasks {
             errored = errored || log_thread_error("read_items", read_task.join());
         }
@@ -122,8 +105,6 @@ pub fn scan_source(
         if errored {
             println!("Scanning failed");
         }
-
-        returned_model
     });
 
     // AFTER PIPELINE TODO
@@ -131,5 +112,5 @@ pub fn scan_source(
     //   index_version did not get updated to the latest vesion. This means
     //   that they were not found in the scan.
 
-    Ok(returned_model)
+    Ok(())
 }
