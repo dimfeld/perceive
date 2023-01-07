@@ -139,9 +139,11 @@ impl Searcher {
             source_points.3.push(id);
         }
 
-        let longest_name = sources.iter().map(|x| x.1.len()).max().unwrap_or(20);
         #[cfg(feature = "cli")]
-        let progress_template = format!("{{prefix:{longest_name}}} {{bar:40}} {{pos}}/{{len}}");
+        let progress_template = {
+            let longest_name = sources.iter().map(|x| x.1.len()).max().unwrap_or(20);
+            format!("{{prefix:{longest_name}}} {{bar:40}} {{pos}}/{{len}}")
+        };
 
         let source_search = sources
             .into_par_iter()
