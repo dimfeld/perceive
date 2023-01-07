@@ -3,7 +3,7 @@
     "beforeBuildCommand": "pnpm run build",
     "beforeDevCommand": "pnpm run dev",
     "devPath": "http://localhost:5173",
-    "distDir": "web/build"
+    "distDir": "src/build"
   },
   "package": {
     "productName": "Perceive",

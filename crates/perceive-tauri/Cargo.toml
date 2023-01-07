@@ -1,13 +1,17 @@
 [package]
-name = "app"
+name = "perceive-tauri"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "Semantic Search for your Life"
+authors = ["Daniel Imfeld <dimfeld>"]
 license = ""
 repository = ""
-default-run = "app"
+default-run = "perceive-tauri"
 edition = "2021"
 rust-version = "1.59"
+
+[[bin]]
+name = "perceive-tauri"
+path = "src-tauri/main.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -15,14 +19,16 @@ rust-version = "1.59"
 tauri-build = { version = "1.2.1", features = [] }
 
 [dependencies]
+perceive-core = { path = "../perceive-core" }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 tauri = { version = "1.2.2", features = [] }
+thiserror = "1.0.38"
 
 [features]
 # by default Tauri runs in production mode
 # when `tauri dev` runs it is executed with `cargo run --no-default-features` if `devPath` is an URL
-default = [ "custom-protocol" ]
+default = ["custom-protocol"]
 # this feature is used for production builds where `devPath` points to the filesystem
 # DO NOT remove this
-custom-protocol = [ "tauri/custom-protocol" ]
+custom-protocol = ["tauri/custom-protocol"]

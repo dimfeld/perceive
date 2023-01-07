@@ -98,16 +98,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2cb2f989d18dd141ab8ae82f64d1a8cdd37e0840f73a406896cf5e99502fab61"
 
 [[package]]
-name = "app"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
-]
-
-[[package]]
 name = "async-compression"
 version = "0.3.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2818,6 +2808,18 @@ dependencies = [
  "time 0.3.17",
  "tracing",
  "zstd 0.12.1+zstd.1.5.2",
+]
+
+[[package]]
+name = "perceive-tauri"
+version = "0.1.0"
+dependencies = [
+ "perceive-core",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "thiserror",
 ]
 
 [[package]]
