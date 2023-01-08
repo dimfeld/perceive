@@ -1,4 +1,10 @@
+<script lang="ts">
+  import { appContext } from '$lib/context';
+
+  const { loaded } = appContext();
+</script>
+
 Hello!
-<p class="text-red-500">Visit <a href="https://kit.svelte.dev">kit.svelte.dev</a> to read the documentation</p>
+<p class="text-red-500">{$loaded.status}</p>
 
 <input type="search" placeholder="Find something" />

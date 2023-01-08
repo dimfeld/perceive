@@ -20,7 +20,7 @@ export function createAppContext(): AppContext {
   const loaded = writable<LoadStatus>({ status: 'loading' });
 
   // Both listen for the event, and do an explicit check, in case the load finished before the app started.
-  listen<LoadStatus>('loaded', (event) => {
+  listen<LoadStatus>('load_status', (event) => {
     loaded.set(event.payload);
   });
 

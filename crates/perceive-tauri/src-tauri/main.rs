@@ -28,10 +28,8 @@ fn load_status(status: State<Arc<Mutex<LoadState>>>) -> LoadState {
 }
 
 fn main() {
-    eprintln!("LIBTORCH {:?}", std::env::var("LIBTORCH"));
-    let database = Database::new(None);
-
     tauri::Builder::default()
+        .manage(AppState::default())
         .setup(|app| {
             let app_state = app.state::<AppState>();
 
@@ -71,7 +69,7 @@ fn main() {
                     let mut value = load_status.lock();
                     *value = result.clone();
                 }
-                window.emit("load-status", Some(result)).ok();
+                window.emit("load_status", Some(result)).ok();
             });
 
             Ok(())
