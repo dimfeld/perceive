@@ -1,3 +1,9 @@
+fn set_dev_rpath() {
+    println!("cargo:rustc-link-arg=-Wl,-rpath,../../torch/lib");
+}
+
 fn main() {
-  tauri_build::build()
+    #[cfg(feature = "dev-command")]
+    set_dev_rpath();
+    tauri_build::build()
 }

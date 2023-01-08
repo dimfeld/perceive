@@ -1,0 +1,4 @@
+set fallback
+
+dev:
+  cargo tauri dev -c tauri-dev.conf.json

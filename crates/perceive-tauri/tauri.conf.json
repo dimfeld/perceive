@@ -36,13 +36,15 @@
       "macOS": {
         "entitlements": null,
         "exceptionDomain": "",
-        "frameworks": [],
+        "frameworks": [
+          "../../torch/lib/libc10.dylib",
+          "../../torch/lib/libtorch.dylib",
+          "../../torch/lib/libtorch_cpu.dylib"
+        ],
         "providerShortName": null,
         "signingIdentity": null
       },
-      "resources": [
-        "../../torch/lib/*"
-      ],
+      "resources": [ ],
       "shortDescription": "",
       "targets": "all",
       "windows": {
