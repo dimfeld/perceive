@@ -28,6 +28,7 @@ fn load_status(status: State<Arc<Mutex<LoadState>>>) -> LoadState {
 }
 
 fn main() {
+    eprintln!("LIBTORCH {:?}", std::env::var("LIBTORCH"));
     let database = Database::new(None);
 
     tauri::Builder::default()
