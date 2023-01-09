@@ -6,8 +6,9 @@
 use std::sync::Arc;
 
 use app_state::AppState;
+use eyre::eyre;
 use parking_lot::Mutex;
-use perceive_core::db::Database;
+use perceive_core::{db::Database, search::SearchItem, Item};
 use serde::{Deserialize, Serialize};
 use tauri::{Manager, State};
 
@@ -27,6 +28,27 @@ fn load_status(status: State<Arc<Mutex<LoadState>>>) -> LoadState {
     value.clone()
 }
 
+#[tauri::command]
+fn search(query: String, db: State<Database>, state: State<AppState>) -> Result<Vec<Item>, String> {
+    let searcher = state.get_searcher().map_err(|e| e.to_string())?;
+    let model = state.get_model().map_err(|e| e.to_string())?;
+    let source_ids = state
+        .sources
+        .load()
+        .iter()
+        .map(|s| s.id)
+        .collect::<Vec<_>>();
+
+    let results = searcher
+        .search_and_retrieve(&db, &model, &source_ids, 10, &query)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|(item, _)| item)
+        .collect::<Vec<_>>();
+
+    Ok(results)
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(AppState::default())
@@ -34,6 +56,8 @@ fn main() {
             let app_state = app.state::<AppState>();
 
             let database = Database::new(None)?;
+            let sources = perceive_core::sources::db::list_sources(&database)?;
+            app_state.sources.store(Arc::new(sources));
             app.manage(database.clone());
 
             let load_status = Arc::new(Mutex::new(LoadState::Loading));
@@ -74,7 +98,7 @@ fn main() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![load_status])
+        .invoke_handler(tauri::generate_handler![load_status, search])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

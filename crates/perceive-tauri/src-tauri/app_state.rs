@@ -20,7 +20,7 @@ pub struct AppState {
     pub model_type: SentenceEmbeddingsModelType,
     pub model_id: u32,
     pub model_version: u32,
-    pub sources: Vec<Source>,
+    pub sources: ArcSwap<Vec<Source>>,
     pub searcher: AsyncBuilder<Searcher>,
 }
 
@@ -34,7 +34,7 @@ impl Default for AppState {
             model_type,
             model_id,
             model_version: 0,
-            sources: Vec::new(),
+            sources: ArcSwap::from_pointee(Vec::new()),
             searcher: AsyncBuilder::default(),
         }
     }
