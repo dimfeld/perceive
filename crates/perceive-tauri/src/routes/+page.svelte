@@ -1,6 +1,7 @@
 <script lang="ts">
   import { appContext } from '$lib/context';
   import { invoke } from '@tauri-apps/api/tauri';
+  import { TextField } from 'svelte-ux';
   import debounce from 'just-debounce-it';
 
   const { loaded } = appContext();
@@ -31,7 +32,14 @@
 <div class="flex flex-col h-screen">
   <p class="text-red-500">{$loaded.status}</p>
 
-  <input type="search" bind:value={query} on:input={search} placeholder="Find something" />
+  <TextField
+    type="search"
+    bind:value={query}
+    debounceChange={50}
+    on:change={search}
+    label="Search"
+    placeholder="Find something"
+  />
 
   <p>Results</p>
   <ol class="flex-1 overflow-y-auto">

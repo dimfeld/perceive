@@ -1,6 +1,10 @@
 lockfileVersion: 5.4
 
+overrides:
+  svelte-ux: file:../../../svelte-ux/package
+
 specifiers:
+  '@mdi/js': ^7.1.96
   '@sveltejs/adapter-static': ^1.0.1
   '@sveltejs/kit': ^1.0.7
   '@tailwindcss/forms': ^0.5.2
@@ -21,7 +25,7 @@ specifiers:
   prettier-plugin-tailwindcss: ^0.2.1
   svelte: ^3.54.0
   svelte-check: ^3.0.1
-  svelte-ux: ^0.22.18
+  svelte-ux: file:/Users/dimfeld/Documents/projects/svelte-ux/package
   tailwindcss: ^3.1.5
   tslib: ^2.4.1
   typescript: ^4.9.3
@@ -29,8 +33,9 @@ specifiers:
   vitest: ^0.26.3
 
 dependencies:
+  '@mdi/js': 7.1.96
   just-debounce-it: 3.2.0
-  svelte-ux: 0.22.18
+  svelte-ux: file:../../../svelte-ux/package_@mdi+js@7.1.96
 
 devDependencies:
   '@sveltejs/adapter-static': 1.0.1_@sveltejs+kit@1.0.7
@@ -326,6 +331,10 @@ packages:
       '@jridgewell/resolve-uri': 3.1.0
       '@jridgewell/sourcemap-codec': 1.4.14
     dev: true
+
+  /@mdi/js/7.1.96:
+    resolution: {integrity: sha512-wlrJs6Ryhaa5CqhK3FjTfMRnb/s7HeLkKMFqwQySkK86cdN1TGdzpSM3O4tsmzCA1dYBeTbXvOwSE/Y42cUrvA==}
+    dev: false
 
   /@nodelib/fs.scandir/2.1.5:
     resolution: {integrity: sha512-vq24Bq3ym5HEQm2NKCr3yXDwjc7vTsEThRDnkp2DK9p1uqLR+DHurm/NOTo0KG7HYHU7eppKZj3MyqYuMBf62g==}
@@ -2269,29 +2278,6 @@ packages:
       typescript: 4.9.4
     dev: true
 
-  /svelte-ux/0.22.18:
-    resolution: {integrity: sha512-LrluFV2m/vc2LENXb67+Yp3p9wntt6wUfDE/uoUbcbbHNkmgbi60bh5zi4eGaKJb29EOTTgOplfqRRdvXJ6WfA==}
-    peerDependencies:
-      '@fortawesome/free-regular-svg-icons': ^6.2.1
-      '@fortawesome/free-solid-svg-icons': ^6.2.1
-      '@mdi/js': ^7.0.96
-    dependencies:
-      '@floating-ui/dom': 1.1.0
-      '@fortawesome/fontawesome-common-types': 6.2.1
-      clsx: 1.2.1
-      d3-array: 3.2.1
-      d3-format: 3.1.0
-      d3-scale: 4.0.2
-      d3-time: 3.1.0
-      date-fns: 2.29.3
-      graphql: 16.6.0
-      immer: 9.0.17
-      lodash-es: 4.17.21
-      rehype-slug: 5.1.0
-      svelte: 3.55.0
-      zod: 3.20.2
-    dev: false
-
   /svelte/3.55.0:
     resolution: {integrity: sha512-uGu2FVMlOuey4JoKHKrpZFkoYyj0VLjJdz47zX5+gVK5odxHM40RVhar9/iK2YFRVxvfg9FkhfVlR0sjeIrOiA==}
     engines: {node: '>= 8'}
@@ -2685,4 +2671,31 @@ packages:
 
   /zod/3.20.2:
     resolution: {integrity: sha512-1MzNQdAvO+54H+EaK5YpyEy0T+Ejo/7YLHS93G3RnYWh5gaotGHwGeN/ZO687qEDU2y4CdStQYXVHIgrUl5UVQ==}
+    dev: false
+
+  file:../../../svelte-ux/package_@mdi+js@7.1.96:
+    resolution: {directory: ../../../svelte-ux/package, type: directory}
+    id: file:../../../svelte-ux/package
+    name: svelte-ux
+    version: 0.22.18
+    peerDependencies:
+      '@fortawesome/free-regular-svg-icons': ^6.2.1
+      '@fortawesome/free-solid-svg-icons': ^6.2.1
+      '@mdi/js': ^7.0.96
+    dependencies:
+      '@floating-ui/dom': 1.1.0
+      '@fortawesome/fontawesome-common-types': 6.2.1
+      '@mdi/js': 7.1.96
+      clsx: 1.2.1
+      d3-array: 3.2.1
+      d3-format: 3.1.0
+      d3-scale: 4.0.2
+      d3-time: 3.1.0
+      date-fns: 2.29.3
+      graphql: 16.6.0
+      immer: 9.0.17
+      lodash-es: 4.17.21
+      rehype-slug: 5.1.0
+      svelte: 3.55.0
+      zod: 3.20.2
     dev: false
