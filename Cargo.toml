@@ -1,5 +1,9 @@
 [workspace]
-members = ["crates/*"]
+members = [
+  "crates/perceive-cli",
+  "crates/perceive-core",
+  "crates/perceive-tauri"
+]
 exclude = ["model_data/rust-bert"]
 
 [profile.release]

@@ -42,11 +42,7 @@
   "dependencies": {
     "@mdi/js": "^7.1.96",
     "just-debounce-it": "^3.2.0",
-    "svelte-ux": "^0.23.0"
-  },
-  "pnpm": {
-    "overrides": {
-      "svelte-ux": "file:../../../svelte-ux/package"
-    }
+    "just-index": "^4.2.0",
+    "svelte-ux": "^0.24.1"
   }
 }

@@ -4,7 +4,7 @@
   import { TextField } from 'svelte-ux';
   import debounce from 'just-debounce-it';
 
-  const { loaded } = appContext();
+  const { loaded, sources } = appContext();
 
   let query = '';
   let results = [];
@@ -37,7 +37,6 @@
     bind:value={query}
     debounceChange={50}
     on:change={search}
-    label="Search"
     placeholder="Find something"
   />
 
@@ -59,8 +58,8 @@
                   <p class="truncate text-sm text-gray-500">{labels.secondary}</p>
                 </div>
               </div>
-              <time class="flex-shrink-0 whitespace-nowrap text-sm text-gray-500"
-                >{labels.time}</time
+              <span class="flex-shrink-0 whitespace-nowrap text-sm text-gray-500"
+                >{$sources[result.source_id]?.name || ''}</span
               >
             </div>
             <div class="mt-1">

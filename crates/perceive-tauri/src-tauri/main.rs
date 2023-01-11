@@ -8,7 +8,7 @@ use std::sync::Arc;
 use app_state::AppState;
 use eyre::eyre;
 use parking_lot::Mutex;
-use perceive_core::{db::Database, search::SearchItem, Item};
+use perceive_core::{db::Database, search::SearchItem, sources::Source, Item};
 use serde::{Deserialize, Serialize};
 use tauri::{Manager, State};
 
@@ -26,6 +26,11 @@ pub enum LoadState {
 fn load_status(status: State<Arc<Mutex<LoadState>>>) -> LoadState {
     let value = status.lock();
     value.clone()
+}
+
+#[tauri::command]
+fn get_sources(state: State<AppState>) -> Vec<Source> {
+    state.sources.load().to_vec()
 }
 
 #[tauri::command]
@@ -98,7 +103,7 @@ fn main() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![load_status, search])
+        .invoke_handler(tauri::generate_handler![load_status, get_sources, search])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

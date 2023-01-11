@@ -1,4 +1,4 @@
 set fallback
 
 dev:
-  cargo tauri dev -c tauri-dev.conf.json
+  cargo tauri dev --release -c tauri-dev.conf.json
