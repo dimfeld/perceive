@@ -1,8 +1,6 @@
 use std::rc::Rc;
 
 use ahash::HashSet;
-#[cfg(feature = "cli")]
-use indicatif::ProgressStyle;
 use rayon::prelude::*;
 use rusqlite::Connection;
 use time::OffsetDateTime;
@@ -25,7 +23,7 @@ pub struct SearchItem {
 
 struct SourceSearch {
     id: i64,
-    hnsw: instant_distance::HnswMap<Point, i64>,
+    hnsw: hnsw_rs::hnsw::Hnsw<f32, NdArrayDistance>,
 }
 
 pub struct Searcher {
@@ -41,25 +39,15 @@ impl Searcher {
         database: &Database,
         model_id: u32,
         model_version: u32,
-        #[cfg(feature = "cli")] progress: Option<indicatif::MultiProgress>,
     ) -> Result<Searcher, eyre::Report> {
         let conn = database.read_pool.get()?;
 
-        let mut sources_stmt = conn.prepare("SELECT id, name FROM sources")?;
+        let mut sources_stmt = conn.prepare("SELECT id FROM sources")?;
         let sources = sources_stmt
-            .query_map([], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-            })?
+            .query_map([], |row| row.get::<_, i64>(0))?
             .collect::<Result<Vec<_>, _>>()?;
 
-        let sources = Self::build_sources(
-            &conn,
-            model_id,
-            model_version,
-            sources,
-            #[cfg(feature = "cli")]
-            progress,
-        )?;
+        let sources = Self::build_sources(&conn, model_id, model_version, &sources)?;
 
         Ok(Searcher {
             sources,
@@ -71,21 +59,12 @@ impl Searcher {
         &mut self,
         database: &Database,
         source_id: i64,
-        source_name: String,
         model_id: u32,
         model_version: u32,
-        #[cfg(feature = "cli")] progress: Option<indicatif::MultiProgress>,
     ) -> Result<(), eyre::Report> {
         let conn = database.read_pool.get()?;
 
-        let sources = Self::build_sources(
-            &conn,
-            model_id,
-            model_version,
-            vec![(source_id, source_name)],
-            #[cfg(feature = "cli")]
-            progress,
-        )?;
+        let sources = Self::build_sources(&conn, model_id, model_version, &[source_id])?;
 
         let Some(result_source) = sources.into_iter().next() else {
             return Ok(());
@@ -103,14 +82,8 @@ impl Searcher {
         conn: &Connection,
         model_id: u32,
         model_version: u32,
-        sources: Vec<(i64, String)>,
-        #[cfg(feature = "cli")] progress: Option<indicatif::MultiProgress>,
+        sources: &[i64],
     ) -> Result<Vec<SourceSearch>, eyre::Report> {
-        let mut sources = sources
-            .into_iter()
-            .map(|(id, name)| (id, name, Vec::new(), Vec::new()))
-            .collect::<Vec<_>>();
-
         let mut stmt = conn.prepare(
             r##"SELECT items.id, source_id, embedding
         FROM items
@@ -118,60 +91,67 @@ impl Searcher {
         WHERE skipped IS NULL AND hidden_at IS NULL"##,
         )?;
 
-        let rows = stmt.query_and_then([model_id, model_version], |row| {
-            let value: (i64, i64, Vec<f32>) = (
-                row.get(0)?,
-                row.get(1)?,
-                deserialize_embedding(row.get_ref(2)?.as_blob().map_err(DbError::query)?),
+        let rows = stmt
+            .query_and_then([model_id, model_version], |row| {
+                let value: (usize, i64, Vec<f32>) = (
+                    row.get(0)?,
+                    row.get(1)?,
+                    deserialize_embedding(row.get_ref(2)?.as_blob().map_err(DbError::query)?),
+                );
+
+                Ok::<_, DbError>(value)
+            })?
+            .map(|row| {
+                let row = row?;
+
+                Ok(sources
+                    .iter()
+                    .position(|&s| s == row.1)
+                    .map(|source_idx| (row.0, source_idx, row.2)))
+            })
+            .filter_map(|r| r.transpose())
+            .collect::<Result<Vec<_>, eyre::Report>>()?;
+
+        let items_per_source = rows
+            .par_iter()
+            .fold(
+                || vec![0; sources.len()],
+                |mut items_per_source, (_, source_idx, _)| {
+                    items_per_source[*source_idx] += 1;
+                    items_per_source
+                },
+            )
+            .reduce(
+                || vec![0; sources.len()],
+                |mut a, b| {
+                    for (a, b) in a.iter_mut().zip(b.iter()) {
+                        *a += b;
+                    }
+                    a
+                },
             );
 
-            Ok::<_, DbError>(value)
-        })?;
+        let mut sources = sources
+            .iter()
+            .zip(items_per_source.into_iter())
+            .map(|(&id, num_elements)| {
+                let num_layers = 16.min((num_elements as f32).ln().trunc() as usize);
+                let hnsw =
+                    hnsw_rs::hnsw::Hnsw::new(64, num_elements, num_layers, 800, NdArrayDistance {});
 
-        for row in rows {
-            let (id, source, embedding) = row?;
-            let source_points = sources.iter_mut().find(|x| x.0 == source);
-            let Some(source_points) = source_points else {
-                continue;
-            };
-
-            source_points.2.push(Point::from(embedding));
-            source_points.3.push(id);
-        }
-
-        #[cfg(feature = "cli")]
-        let progress_template = {
-            let longest_name = sources.iter().map(|x| x.1.len()).max().unwrap_or(20);
-            format!("{{prefix:{longest_name}}} {{bar:40}} {{pos}}/{{len}}")
-        };
-
-        let source_search = sources
-            .into_par_iter()
-            .filter(|(_, _, points, _)| !points.is_empty())
-            .map(|(source_id, name, points, values)| {
-                let hnsw = instant_distance::Builder::default();
-
-                #[cfg(feature = "cli")]
-                let hnsw = if let Some(progress) = &progress {
-                    let bar = indicatif::ProgressBar::new(0)
-                        .with_prefix(name)
-                        .with_style(ProgressStyle::with_template(&progress_template).unwrap());
-
-                    hnsw.progress(progress.add(bar))
-                } else {
-                    hnsw
-                };
-
-                let hnsw = hnsw.build(points, values);
-
-                SourceSearch {
-                    id: source_id,
-                    hnsw,
-                }
+                SourceSearch { id, hnsw }
             })
             .collect::<Vec<_>>();
 
-        Ok(source_search)
+        rows.into_par_iter().for_each(|(id, source_idx, point)| {
+            sources[source_idx].hnsw.insert_slice((&point, id));
+        });
+
+        for source in sources.iter_mut() {
+            source.hnsw.set_searching_mode(true);
+        }
+
+        Ok(sources)
     }
 
     pub fn search_vector(
@@ -180,24 +160,19 @@ impl Searcher {
         num_results: usize,
         vector: Vec<f32>,
     ) -> Vec<SearchItem> {
-        let search_point = Point::from(vector);
-
         let mut results = self
             .sources
             .par_iter()
             .filter(|source| sources.contains(&source.id))
             .flat_map_iter(|source| {
-                let mut searcher = instant_distance::Search::default();
                 source
                     .hnsw
-                    .search(&search_point, &mut searcher)
-                    .filter(|item| !self.hidden.contains(item.value))
-                    .take(num_results)
-                    .map(|item| SearchItem {
-                        id: *item.value,
-                        score: item.distance,
+                    .search(&vector, num_results, 24)
+                    .into_iter()
+                    .map(|n| SearchItem {
+                        id: n.d_id as i64,
+                        score: n.distance,
                     })
-                    .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
 
@@ -289,24 +264,17 @@ pub fn encode_query(model: &Model, query: &str) -> Vec<f32> {
 }
 
 #[derive(Clone)]
-pub struct Point(ndarray::Array1<f32>);
+pub struct NdArrayDistance {}
 
-impl From<tch::Tensor> for Point {
-    fn from(value: tch::Tensor) -> Self {
-        let v = Vec::<f32>::from(value);
-        Point(ndarray::Array1::from(v))
-    }
-}
+impl hnsw_rs::dist::Distance<f32> for NdArrayDistance {
+    fn eval(&self, va: &[f32], vb: &[f32]) -> f32 {
+        let a = ndarray::ArrayView1::from(va);
+        let b = ndarray::ArrayView1::from(vb);
 
-impl From<Vec<f32>> for Point {
-    fn from(value: Vec<f32>) -> Self {
-        Point(ndarray::Array1::from(value))
-    }
-}
+        let dot = a.dot(&b);
+        let result = 1.0 - (dot / (va.len() as f32));
 
-impl instant_distance::Point for Point {
-    fn distance(&self, other: &Self) -> f32 {
-        0.0 - self.0.dot(&other.0)
+        result.max(0.0)
     }
 }
 

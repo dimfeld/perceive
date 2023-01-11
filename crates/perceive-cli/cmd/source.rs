@@ -1,4 +1,4 @@
-use std::{path::Path, sync::atomic::AtomicBool};
+use std::{path::Path, sync::atomic::AtomicBool, time::Duration};
 
 use clap::{Args, Subcommand};
 use eyre::{eyre, Result};
@@ -321,23 +321,22 @@ fn rebuild_search(state: &mut AppState, args: RebuildSearchArgs) -> Result<()> {
         .find(|s| s.name == args.name)
         .ok_or_else(|| eyre!("Source not found"))?;
 
-    println!("Rebuilding search...");
-    let progress = indicatif::MultiProgress::new();
+    let progress = indicatif::ProgressBar::new_spinner().with_message("Rebuilding search...");
+    progress.enable_steady_tick(Duration::from_millis(200));
     let start_time = std::time::Instant::now();
 
     state.searcher.rebuild_source(
         &state.database,
         source.id,
-        source.name.clone(),
         state.model_id,
         state.model_version,
-        Some(progress),
     )?;
 
-    println!(
-        "Rebuilt source search in {} seconds",
+    let final_msg = format!(
+        "Rebuilt source search in {} seconds\n",
         start_time.elapsed().as_secs()
     );
+    progress.finish_with_message(final_msg);
 
     Ok(())
 }

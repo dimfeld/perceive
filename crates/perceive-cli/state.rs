@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use eyre::eyre;
 use perceive_core::{
@@ -27,16 +27,17 @@ impl AppState {
 
         let (searcher, (main_model, highlights_model)) = std::thread::scope(|scope| {
             let searcher = scope.spawn(|| {
-                let progress = indicatif::MultiProgress::new();
                 let start = std::time::Instant::now();
-                println!("Building search... ");
-                let searcher = perceive_core::search::Searcher::build(
-                    &db,
-                    model_id,
-                    model_version,
-                    Some(progress),
-                )?;
-                println!("Built search in {} seconds", start.elapsed().as_secs());
+
+                let progress =
+                    indicatif::ProgressBar::new_spinner().with_message("Rebuilding search...");
+                progress.enable_steady_tick(Duration::from_millis(200));
+
+                let searcher =
+                    perceive_core::search::Searcher::build(&db, model_id, model_version)?;
+
+                let final_msg = format!("Built search in {} seconds\n", start.elapsed().as_secs());
+                progress.finish_with_message(final_msg);
 
                 Ok::<_, eyre::Report>(searcher)
             });
