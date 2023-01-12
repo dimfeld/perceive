@@ -101,6 +101,7 @@ impl DatabaseInner {
         let migrations = rusqlite_migration::Migrations::new(vec![
             rusqlite_migration::M::up(include_str!("./migrations/00001_init.sql")),
             rusqlite_migration::M::up(include_str!("./migrations/00002_tags.sql")),
+            rusqlite_migration::M::up(include_str!("./migrations/00003_model_7.sql")),
         ]);
 
         migrations.to_latest(conn)?;

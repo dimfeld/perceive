@@ -140,7 +140,7 @@ pub(self) fn wrap_thread<T, E: Display>(name: &str, r: Result<T, E>) -> Result<T
     }
 }
 
-pub(self) fn log_thread_error<T, E: Display>(
+pub(self) fn log_thread_error<T, E: Display + std::fmt::Debug>(
     name: &str,
     r: std::thread::Result<Result<T, E>>,
 ) -> bool {
@@ -150,7 +150,7 @@ pub(self) fn log_thread_error<T, E: Display>(
             true
         }
         Ok(Err(e)) => {
-            eprintln!("Thread {name} failed: {}", e);
+            eprintln!("Thread {name} failed: {:?}", e);
             true
         }
         Ok(Ok(_)) => false,
