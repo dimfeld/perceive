@@ -14,6 +14,12 @@ browser history and filesystem sources, and index them for searching.
 - Supports multiple sources at once
 - All indexing happens locally -- no need to send your data to someone else's server
 
+## Adding Sources
+
+The browser history and bookmark source types use the Chromium browser directory as the location. For Brave Browser on
+macOS this is ` ~/Library/Application\ Support/BraveSoftware/Brave-Browser/Default`. Other Chromium-based browsers will
+have similar locations.
+
 ## Future Features
 
 - Bookmark management
@@ -21,7 +27,14 @@ browser history and filesystem sources, and index them for searching.
 - Better article content extraction
 - Browser extension for better page capture
 
-## Building on macOS
+## Installation
+
+As of now there is no prepackaged binary with everything included.
+
+First, you'll want to run `just install-models`, using [just](https://github.com/casey/just). This will download the 
+model from Huggingface and convert it to the format used by Rust's version of Torch.
+
+### Building on macOS
 
 You'll need to have libtorch installed. You can use `pip3` or `homebrew` to install `pytorch`, and then
 set the LIBTORCH environment variable to the path where libtorch is installed.
