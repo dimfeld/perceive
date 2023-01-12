@@ -19,7 +19,7 @@ directories = "4.0.1"
 eyre = "0.6.8"
 flume = "0.10.14"
 globset = { version = "0.4.9", features = ["serde"] }
-gray_matter = "0.2.4"
+gray_matter = { git = "https://github.com/dimfeld/gray-matter-rs", rev = "3eca7d89d754dc076ca3b12f6b016695fd3b328f" }
 html2text = { version = "0.4.4", optional = true }
 http = "0.2.8"
 httpdate = { version = "1.0.2", optional = true }

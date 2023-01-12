@@ -1587,8 +1587,7 @@ dependencies = [
 [[package]]
 name = "gray_matter"
 version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f72b62df0267d82db4375544c999805830ba2659116ad4e785a222966b5dafe"
+source = "git+https://github.com/dimfeld/gray-matter-rs?rev=3eca7d89d754dc076ca3b12f6b016695fd3b328f#3eca7d89d754dc076ca3b12f6b016695fd3b328f"
 dependencies = [
  "serde",
  "serde_json",
