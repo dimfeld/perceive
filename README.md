@@ -4,6 +4,9 @@ Semantic search for your life
 Perceive is a side project which I started to become more familiar with ML embeddings and semantic search. It has the ability to import
 browser history and filesystem sources, and index them for searching.
 
+This project was a nice proof of concept, but is on hold indefinitely. Much of the work involved here will be reused for my new [mAIven](https://github.com/dimfeld/maiven) project.
+
+
 ![Screenshot](./perceive-screenshot-small.jpeg)
 
 ## Features
